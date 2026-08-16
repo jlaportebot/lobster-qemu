@@ -66,7 +66,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(LobsterNetState, LOBSTER_NET)
 #define LOBSTER_NET_MAGIC       0x4C4E4554u  /* "LNET" */
 #define LOBSTER_NET_VERSION     0x00020000u  /* v1.1 — added compile command */
 #define LOBSTER_URL_MAX         3840          /* 0xF00: space between 0x100 and 0x1000 */
-#define LOBSTER_RESP_MAX        262144        /* 256KB for libc-linked binaries */
+#define LOBSTER_RESP_MAX        524288        /* 512KB for MicroPython binaries */
 #define LOBSTER_URL_OFFSET      0x100
 #define LOBSTER_RESP_OFFSET     0x1000
 #define LOBSTER_MMIO_SIZE       (LOBSTER_RESP_OFFSET + LOBSTER_RESP_MAX)
