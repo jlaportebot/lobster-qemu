@@ -66,7 +66,7 @@ OBJECT_DECLARE_SIMPLE_TYPE(LobsterNetState, LOBSTER_NET)
 #define LOBSTER_NET_MAGIC       0x4C4E4554u  /* "LNET" */
 #define LOBSTER_NET_VERSION     0x00020000u  /* v1.1 — added compile command */
 #define LOBSTER_URL_MAX         3840          /* 0xF00: space between 0x100 and 0x1000 */
-#define LOBSTER_RESP_MAX        65536
+#define LOBSTER_RESP_MAX        262144        /* 256KB for libc-linked binaries */
 #define LOBSTER_URL_OFFSET      0x100
 #define LOBSTER_RESP_OFFSET     0x1000
 #define LOBSTER_MMIO_SIZE       (LOBSTER_RESP_OFFSET + LOBSTER_RESP_MAX)
@@ -234,10 +234,14 @@ static void lobster_net_compile(LobsterNetState *s)
     snprintf(cmd, sizeof(cmd),
              "aarch64-linux-gnu-gcc"
              " -ffreestanding -nostdlib -static -O2 -nostartfiles"
+             " -ffunction-sections -fdata-sections"
              " -Wl,-Ttext=0x10000000"
              " -Wl,--build-id=none"
              " -Wl,--nmagic"
-             " -o %s %s 2>%s",
+             " -Wl,--gc-sections"
+             " -I/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/libc/include"
+             " -L/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/libc"
+             " -o %s %s -llobsterc 2>%s",
              out_path, src_path, err_path);
 
     fprintf(stderr, "[lobster-net] compile: running: %s\n", cmd);
