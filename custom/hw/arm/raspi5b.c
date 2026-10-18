@@ -279,6 +279,16 @@ static void raspi5b_machine_init(MachineState *machine)
         }
     }
 
+    /* Create and map the LobsterOS virtual disk at 0x7d200000
+     * Host-backed block device (backing image via LBST_DISKIMG env var):
+     * one MMIO command per 512-byte block, read or write. */
+    {
+        DeviceState *disk_dev = sysbus_create_simple("lobster-disk", 0, NULL);
+        if (disk_dev) {
+            sysbus_mmio_map(SYS_BUS_DEVICE(disk_dev), 0, 0x7d200000ULL);
+        }
+    }
+
     /* For bare-metal kernels (no ARM64 Linux magic header), write a proper
      * bootloader using the Linux bootloader_aarch64 which sets up registers
      * and jumps to the kernel. This handles fixups correctly. */
