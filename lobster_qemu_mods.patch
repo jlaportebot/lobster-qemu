@@ -1,0 +1,381 @@
+diff --git a/hw/arm/meson.build b/hw/arm/meson.build
+index ac473ce..f9b4d5e 100644
+--- a/hw/arm/meson.build
++++ b/hw/arm/meson.build
+@@ -27,8 +27,9 @@ arm_ss.add(when: 'CONFIG_OMAP', if_true: files('omap1.c'))
+ arm_ss.add(when: 'CONFIG_ALLWINNER_A10', if_true: files('allwinner-a10.c', 'cubieboard.c'))
+ arm_ss.add(when: 'CONFIG_ALLWINNER_H3', if_true: files('allwinner-h3.c', 'orangepi.c'))
+ arm_ss.add(when: 'CONFIG_ALLWINNER_R40', if_true: files('allwinner-r40.c', 'bananapi_m2u.c'))
+-arm_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2836.c', 'raspi.c'))
+-arm_ss.add(when: ['CONFIG_RASPI', 'TARGET_AARCH64'], if_true: files('bcm2838.c', 'raspi4b.c'))
++arm_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2836.c', 'raspi.c', 'bcm2835_peripherals.c'))
++arm_ss.add(when: ['CONFIG_RASPI', 'TARGET_AARCH64'], if_true: files('bcm2838.c', 'bcm2838_peripherals.c', 'raspi4b.c'))
++arm_ss.add(when: ['CONFIG_RASPI', 'TARGET_AARCH64'], if_true: files('bcm2712.c', 'bcm2712_peripherals.c', 'bcm2712_rp1.c', 'bcm2712_v3d.c', 'raspi5b.c'))
+ arm_ss.add(when: 'CONFIG_STM32F100_SOC', if_true: files('stm32f100_soc.c'))
+ arm_ss.add(when: 'CONFIG_STM32F205_SOC', if_true: files('stm32f205_soc.c'))
+ arm_ss.add(when: 'CONFIG_STM32F405_SOC', if_true: files('stm32f405_soc.c'))
+@@ -68,11 +69,6 @@ system_ss.add(when: 'CONFIG_ARM_SMMUV3', if_true: files('smmu-common.c'))
+ system_ss.add(when: 'CONFIG_COLLIE', if_true: files('collie.c'))
+ system_ss.add(when: 'CONFIG_EXYNOS4', if_true: files('exynos4_boards.c'))
+ system_ss.add(when: 'CONFIG_NETDUINO2', if_true: files('netduino2.c'))
+-system_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2835_peripherals.c'))
+-system_ss.add(when: 'CONFIG_RASPI', if_true: files('bcm2838_peripherals.c'))
++system_ss.add(when: ['CONFIG_RASPI', 'TARGET_AARCH64'], if_true: files('../pci/bcm2712_mip.c'))
+ system_ss.add(when: 'CONFIG_STRONGARM', if_true: files('strongarm.c'))
+-system_ss.add(when: 'CONFIG_SX1', if_true: files('omap_sx1.c'))
+-system_ss.add(when: 'CONFIG_VERSATILE', if_true: files('versatilepb.c'))
+-system_ss.add(when: 'CONFIG_VEXPRESS', if_true: files('vexpress.c'))
+-
+ hw_arch += {'arm': arm_ss}
+diff --git a/hw/arm/raspi.c b/hw/arm/raspi.c
+index dce35ca..a17ed88 100644
+--- a/hw/arm/raspi.c
++++ b/hw/arm/raspi.c
+@@ -19,6 +19,7 @@
+ #include "hw/arm/boot.h"
+ #include "hw/arm/bcm2836.h"
+ #include "hw/arm/bcm2838.h"
++#include "hw/arm/bcm2712.h"
+ #include "hw/arm/raspi_platform.h"
+ #include "hw/registerfields.h"
+ #include "qemu/error-report.h"
+@@ -60,6 +61,7 @@ typedef enum RaspiProcessorId {
+     PROCESSOR_ID_BCM2836 = 1,
+     PROCESSOR_ID_BCM2837 = 2,
+     PROCESSOR_ID_BCM2838 = 3,
++    PROCESSOR_ID_BCM2712 = 4,
+ } RaspiProcessorId;
+ 
+ static const struct {
+@@ -70,6 +72,7 @@ static const struct {
+     [PROCESSOR_ID_BCM2836] = {TYPE_BCM2836, BCM283X_NCPUS},
+     [PROCESSOR_ID_BCM2837] = {TYPE_BCM2837, BCM283X_NCPUS},
+     [PROCESSOR_ID_BCM2838] = {TYPE_BCM2838, BCM283X_NCPUS},
++    [PROCESSOR_ID_BCM2712] = {TYPE_BCM2712, BCM283X_NCPUS},
+ };
+ 
+ uint64_t board_ram_size(uint32_t board_rev)
+diff --git a/hw/char/bcm2835_aux.c b/hw/char/bcm2835_aux.c
+index 9b073fc..2023618 100644
+--- a/hw/char/bcm2835_aux.c
++++ b/hw/char/bcm2835_aux.c
+@@ -296,9 +296,9 @@ static const Property bcm2835_aux_props[] = {
+     DEFINE_PROP_CHR("chardev", BCM2835AuxState, chr),
+ };
+ 
+-static void bcm2835_aux_class_init(ObjectClass *oc, void *data)
++static void bcm2835_aux_class_init(ObjectClass *klass, void *data)
+ {
+-    DeviceClass *dc = DEVICE_CLASS(oc);
++    DeviceClass *dc = DEVICE_CLASS(klass);
+ 
+     dc->realize = bcm2835_aux_realize;
+     dc->vmsd = &vmstate_bcm2835_aux;
+diff --git a/hw/gpio/meson.build b/hw/gpio/meson.build
+index 7484061..45439c0 100644
+--- a/hw/gpio/meson.build
++++ b/hw/gpio/meson.build
+@@ -12,7 +12,8 @@ system_ss.add(when: 'CONFIG_NRF51_SOC', if_true: files('nrf51_gpio.c'))
+ system_ss.add(when: 'CONFIG_OMAP', if_true: files('omap_gpio.c'))
+ system_ss.add(when: 'CONFIG_RASPI', if_true: files(
+     'bcm2835_gpio.c',
+-    'bcm2838_gpio.c'
++    'bcm2838_gpio.c',
++    'bcm2712_rp1_gpio.c'
+ ))
+ system_ss.add(when: 'CONFIG_STM32L4X5_SOC', if_true: files('stm32l4x5_gpio.c'))
+ system_ss.add(when: 'CONFIG_ASPEED_SOC', if_true: files('aspeed_gpio.c'))
+diff --git a/hw/i2c/bcm2835_i2c.c b/hw/i2c/bcm2835_i2c.c
+index 67bfdef..6f06f41 100644
+--- a/hw/i2c/bcm2835_i2c.c
++++ b/hw/i2c/bcm2835_i2c.c
+@@ -28,6 +28,7 @@
+ #include "qemu/log.h"
+ #include "hw/i2c/bcm2835_i2c.h"
+ #include "hw/irq.h"
++#include "hw/qdev-properties.h"
+ #include "migration/vmstate.h"
+ 
+ static void bcm2835_i2c_update_interrupt(BCM2835I2CState *s)
+diff --git a/hw/intc/bcm2836_control.c b/hw/intc/bcm2836_control.c
+index 197a0e2..c4c4b30 100644
+--- a/hw/intc/bcm2836_control.c
++++ b/hw/intc/bcm2836_control.c
+@@ -197,12 +197,21 @@ static void bcm2836_control_local_timer_set_next(void *opaque)
+ {
+     BCM2836ControlState *s = opaque;
+     uint64_t next_event;
+-
+-    assert(LOCALTIMER_VALUE(s->local_timer_control) > 0);
++    uint64_t reload_value = LOCALTIMER_VALUE(s->local_timer_control);
++
++    if (reload_value == 0) {
++        /*
++         * Spec doesn't say what happens in this case; treat as a
++         * guest error and stop the timer running.
++         */
++        qemu_log_mask(LOG_GUEST_ERROR, "%s: local timer reload value is 0\n",
++                      __func__);
++        timer_del(&s->timer);
++        return;
++    }
+ 
+     next_event = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+-        muldiv64(LOCALTIMER_VALUE(s->local_timer_control),
+-            NANOSECONDS_PER_SECOND, LOCALTIMER_FREQ);
++        muldiv64(reload_value, NANOSECONDS_PER_SECOND, LOCALTIMER_FREQ);
+     timer_mod(&s->timer, next_event);
+ }
+ 
+diff --git a/hw/misc/bcm2835_cprman.c b/hw/misc/bcm2835_cprman.c
+index 0c4d4b7..a8ed8ef 100644
+--- a/hw/misc/bcm2835_cprman.c
++++ b/hw/misc/bcm2835_cprman.c
+@@ -774,6 +774,17 @@ static void cprman_realize(DeviceState *dev, Error **errp)
+             return;
+         }
+     }
++
++    /* Set default UART clock mux to enabled with XOSC source (~3MHz) */
++    /* CM_UARTCTL (0x0f0): ENABLE=1, SRC=1 (XOSC) */
++    s->regs[R_CM_UARTCTL / sizeof(uint32_t)] = CPRMAN_PASSWORD << 24 | (1 << 4) | 1;
++    /* CM_UARTDIV (0x0f4): divider for ~3MHz from 19.2MHz XOSC */
++    /* div = 19.2/3 = 6.4 -> int=6, frac=0.4*4096=1638 */
++    s->regs[R_CM_UARTDIV / sizeof(uint32_t)] = CPRMAN_PASSWORD << 24 | (6 << 12) | 1638;
++    /* Ensure XOSC clock is set before updating UART mux */
++    clock_update_hz(s->xosc, s->xosc_freq);
++    /* Trigger clock mux update for UART */
++    clock_mux_update(&s->clock_muxes[CPRMAN_CLOCK_UART]);
+ }
+ 
+ static const VMStateDescription cprman_vmstate = {
+diff --git a/hw/misc/lobster_net.c b/hw/misc/lobster_net.c
+index 697ef2a..b1f3f51 100644
+--- a/hw/misc/lobster_net.c
++++ b/hw/misc/lobster_net.c
+@@ -40,6 +40,10 @@
+  *   0x28  STATUS       (read-only)  — 0=idle, 1=busy, 2=done, 3=error
+  *   0x2C  RESP_LEN     (read-only)  — response body length
+  *   0x30  RESP_CODE    (read-only)  — HTTP code (fetch) or 0=ok/1=error (compile)
++ *   0x34  AUTH_MODE    (read/write) — 0=none, 1=Bearer token auth. When set,
++ *                                     url_buf is "<token>\n<url>". Token is
++ *                                     restricted to [A-Za-z0-9._-] and passed
++ *                                     to curl as: -H "Authorization: Bearer X"
+  *   0x100+   SRC_DATA  (write)      — URL bytes or C source (up to 3840)
+  *   0x1000+  RESP_DATA  (read)       — response body or compiled ELF (up to 65536)
+  *
+@@ -58,13 +62,14 @@
+ #include <stdlib.h>
+ #include <errno.h>
+ #include <unistd.h>
++#include <ctype.h>
+ #include <sys/wait.h>
+ 
+ #define TYPE_LOBSTER_NET "lobster-net"
+ OBJECT_DECLARE_SIMPLE_TYPE(LobsterNetState, LOBSTER_NET)
+ 
+ #define LOBSTER_NET_MAGIC       0x4C4E4554u  /* "LNET" */
+-#define LOBSTER_NET_VERSION     0x00020000u  /* v1.1 — added compile command */
++#define LOBSTER_NET_VERSION     0x00030000u  /* v1.2 — added Bearer-token auth for HTTP fetch */
+ #define LOBSTER_URL_MAX         3840          /* 0xF00: space between 0x100 and 0x1000 */
+ #define LOBSTER_RESP_MAX        524288        /* 512KB for MicroPython binaries */
+ #define LOBSTER_URL_OFFSET      0x100
+@@ -97,18 +102,58 @@ struct LobsterNetState {
+ 
+     /* Status */
+     uint32_t status;
++
++    /* Auth mode: 0 = none, 1 = Bearer token (carried as "<token>\n<url>"
++     * in url_buf). Lets the guest make authenticated API calls (e.g. GitHub). */
++    uint32_t auth_mode;
+ };
+ 
+ /* ─── Host-side HTTP fetch via curl ─────────────────────────────── */
+ 
+ static void lobster_net_fetch(LobsterNetState *s)
+ {
+-    char cmd[4096];
++    char cmd[8192];
+     char url[LOBSTER_URL_MAX + 1];
++    char token[768] = {0};
++    const char *url_ptr = (const char *)s->url_buf;
++    uint32_t url_len = s->url_len;
++    int has_auth = 0;
++
++    /* When auth_mode is set, the buffer is "<token>\n<url>". Split on the
++     * first newline so we only ever append a fixed-format header to curl.
++     * Token characters are restricted to [A-Za-z0-9._-] to prevent any
++     * shell metacharacter from leaking into the popen() command line. */
++    if (s->auth_mode == 1) {
++        uint32_t nl = 0;
++        while (nl < s->url_len && s->url_buf[nl] != '\n') {
++            nl++;
++        }
++        if (nl < s->url_len && nl > 0) {
++            uint32_t tlen = nl < sizeof(token) - 1 ? nl : sizeof(token) - 1;
++            uint32_t i;
++            for (i = 0; i < tlen; i++) {
++                unsigned char c = s->url_buf[i];
++                if (!(isalnum(c) || c == '_' || c == '-' || c == '.')) {
++                    break;  /* reject token with metacharacters */
++                }
++            }
++            if (i == tlen) {
++                memcpy(token, s->url_buf, tlen);
++                url_ptr += nl + 1;
++                url_len = s->url_len - nl - 1;
++                has_auth = 1;
++            }
++        }
++        /* reset auth so the next fetch is anon unless the guest re-sets it */
++        s->auth_mode = 0;
++    }
+ 
+     /* Null-terminate URL */
+-    memcpy(url, s->url_buf, s->url_len);
+-    url[s->url_len] = '\0';
++    if (url_len >= sizeof(url)) {
++        url_len = sizeof(url) - 1;
++    }
++    memcpy(url, url_ptr, url_len);
++    url[url_len] = '\0';
+ 
+     /* Validate URL starts with http */
+     if (s->url_len < 7 || (strncmp(url, "http://", 7) != 0 &&
+@@ -120,11 +165,18 @@ static void lobster_net_fetch(LobsterNetState *s)
+     }
+ 
+     /* Build curl command: silent, show response code, follow redirects,
+-     * write body to stdout, max-time 10s */
+-    snprintf(cmd, sizeof(cmd),
+-             "curl -s -o /dev/stdout -w '\\n%%{http_code}'"
+-             " -L --max-time 10 '%s' 2>/dev/null",
+-             url);
++     * write body to stdout, max-time 10s. Add optional auth header. */
++    if (has_auth) {
++        snprintf(cmd, sizeof(cmd),
++                 "curl -s -o /dev/stdout -w '\\n%%{http_code}'"
++                 " -L --max-time 10 -H 'Authorization: Bearer %s' '%s' 2>/dev/null",
++                 token, url);
++    } else {
++        snprintf(cmd, sizeof(cmd),
++                 "curl -s -o /dev/stdout -w '\\n%%{http_code}'"
++                 " -L --max-time 10 '%s' 2>/dev/null",
++                 url);
++    }
+ 
+     FILE *fp = popen(cmd, "r");
+     if (!fp) {
+@@ -310,6 +362,7 @@ static uint64_t lobster_net_mmio_read(void *opaque, hwaddr offset, unsigned size
+     case 0x28: return s->status;
+     case 0x2C: return s->resp_len;
+     case 0x30: return s->resp_code;
++    case 0x34: return s->auth_mode;
+     default: {
+         /* URL/source data region */
+         if (offset >= LOBSTER_URL_OFFSET && offset < LOBSTER_RESP_OFFSET) {
+@@ -358,6 +411,7 @@ static void lobster_net_mmio_write(void *opaque, hwaddr offset,
+             s->url_len = 0;
+             s->resp_len = 0;
+             s->resp_code = 0;
++            s->auth_mode = 0;
+             memset(s->url_buf, 0, LOBSTER_URL_MAX);
+             memset(s->resp_buf, 0, LOBSTER_RESP_MAX);
+             break;
+@@ -370,6 +424,11 @@ static void lobster_net_mmio_write(void *opaque, hwaddr offset,
+         }
+         break;
+ 
++    case 0x30:
++    case 0x34: /* AUTH_MODE — 0=none, 1=bearer */
++        s->auth_mode = (uint32_t)val & 1;
++        break;
++
+     default: {
+         /* URL/source data region */
+         if (offset >= LOBSTER_URL_OFFSET && offset < LOBSTER_RESP_OFFSET) {
+@@ -405,6 +464,7 @@ static void lobster_net_init(Object *obj)
+     s->resp_len = 0;
+     s->resp_code = 0;
+     s->status = NET_STATUS_IDLE;
++    s->auth_mode = 0;
+     memset(s->url_buf, 0, LOBSTER_URL_MAX);
+     memset(s->resp_buf, 0, LOBSTER_RESP_MAX);
+ }
+diff --git a/hw/misc/meson.build b/hw/misc/meson.build
+index 6d47de4..c7238fa 100644
+--- a/hw/misc/meson.build
++++ b/hw/misc/meson.build
+@@ -37,6 +37,9 @@ system_ss.add(when: 'CONFIG_SIFIVE_U_PRCI', if_true: files('sifive_u_prci.c'))
+ 
+ subdir('macio')
+ 
++# LobsterOS input device (always built for aarch64 raspi)
++system_ss.add(when: ['CONFIG_RASPI', 'TARGET_AARCH64'], if_true: files('lobster_input.c', 'lobster_net.c', 'lobster_serial.c'))
++
+ # ivshmem devices
+ system_ss.add(when: 'CONFIG_IVSHMEM_DEVICE', if_true: files('ivshmem-pci.c'))
+ system_ss.add(when: 'CONFIG_IVSHMEM_FLAT_DEVICE', if_true: files('ivshmem-flat.c'))
+diff --git a/hw/sd/bcm2835_sdhost.c b/hw/sd/bcm2835_sdhost.c
+index 0724949..9e6a695 100644
+--- a/hw/sd/bcm2835_sdhost.c
++++ b/hw/sd/bcm2835_sdhost.c
+@@ -13,10 +13,10 @@
+ 
+ #include "qemu/osdep.h"
+ #include "qemu/log.h"
+-#include "qemu/module.h"
+-#include "system/blockdev.h"
+-#include "hw/irq.h"
++#include "qemu/osdep.h"
+ #include "hw/sd/bcm2835_sdhost.h"
++#include "hw/irq.h"
++#include "hw/qdev-properties.h"
+ #include "migration/vmstate.h"
+ #include "trace.h"
+ #include "qom/object.h"
+@@ -113,15 +113,12 @@ static void bcm2835_sdhost_send_command(BCM2835SDHostState *s)
+ {
+     SDRequest request;
+     uint8_t rsp[16];
+-    int rlen;
++    size_t rlen;
+ 
+     request.cmd = s->cmd & SDCMD_CMD_MASK;
+     request.arg = s->cmdarg;
+ 
+     rlen = sdbus_do_command(&s->sdbus, &request, rsp);
+-    if (rlen < 0) {
+-        goto error;
+-    }
+     if (!(s->cmd & SDCMD_NO_RESPONSE)) {
+         if (rlen == 0 || (rlen == 4 && (s->cmd & SDCMD_LONG_RESPONSE))) {
+             goto error;
+diff --git a/include/ui/input.h b/include/ui/input.h
+index 8f9aac5..675290a 100644
+--- a/include/ui/input.h
++++ b/include/ui/input.h
+@@ -37,6 +37,7 @@ void qemu_input_handler_unregister(QemuInputHandlerState *s);
+ void qemu_input_handler_bind(QemuInputHandlerState *s,
+                              const char *device_id, int head,
+                              Error **errp);
++void qemu_input_handler_bind_console(QemuInputHandlerState *s, QemuConsole *con);
+ void qemu_input_event_send(QemuConsole *src, InputEvent *evt);
+ void qemu_input_event_send_impl(QemuConsole *src, InputEvent *evt);
+ void qemu_input_event_sync(void);
+diff --git a/ui/input.c b/ui/input.c
+index 147e69c..539da03 100644
+--- a/ui/input.c
++++ b/ui/input.c
+@@ -97,6 +97,11 @@ void qemu_input_handler_bind(QemuInputHandlerState *s,
+     s->con = con;
+ }
+ 
++void qemu_input_handler_bind_console(QemuInputHandlerState *s, QemuConsole *con)
++{
++    s->con = con;
++}
++
+ static QemuInputHandlerState*
+ qemu_input_find_handler(uint32_t mask, QemuConsole *con)
+ {
