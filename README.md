@@ -12,7 +12,7 @@ series for the stock files that needed modification.
   VC-peripheral bus at 0x7c000000, SCB bus at 0x107c000000, EMMC2, RP1 I/O
   controller, DTB fixups for bare-metal kernels.
 - **`lobster-serial`** (`hw/misc/lobster_serial.c`) — bulk console TX window at
-  `0x7d00a000`: guest writes up to 2048 payload bytes + one TXLEN register
+  `0x7d100000` (moved off `0x7d00a000`, which shadowed lobster-net's response window): guest writes up to 2048 payload bytes + one TXLEN register
   write, and the device forwards the whole chunk through the PL011 chardev in
   a single host call. Cuts console-heavy guest workloads by ~2x on TCG.
 - **`lobster-net`** (`hw/misc/lobster_net.c`) — MMIO HTTP proxy + cross C
@@ -30,7 +30,7 @@ series for the stock files that needed modification.
 | `0x7d001000` | PL011 UART0 (console) |
 | `0x7d008000` | lobster-input (mouse/kbd ring) |
 | `0x7d009000` | lobster-net (HTTP proxy + C compiler) |
-| `0x7d00a000` | lobster-serial (bulk TX window, magic `LBUF`) |
+| `0x7d100000` | lobster-serial (bulk TX window, magic `LBUF`) |
 | `0x7c003000` | BCM2835 system timer (SPI 64–67) |
 | `0x107fff9000` | GIC-400 distributor |
 | `0x107fffa000` | GIC-400 CPU interface |

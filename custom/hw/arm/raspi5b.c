@@ -252,7 +252,7 @@ static void raspi5b_machine_init(MachineState *machine)
         }
     }
 
-    /* Create and map the LobsterOS bulk-serial device at 0x7d00a000
+    /* Create and map the LobsterOS bulk-serial device at 0x7d100000
      * This MMIO device lets the guest emit console output with one MMIO
      * write per chunk instead of two MMIO ops per byte via the PL011.
      * Output is forwarded into the PL011's serial chardev. */
@@ -275,7 +275,7 @@ static void raspi5b_machine_init(MachineState *machine)
                 fprintf(stderr, "[lobster-serial] WARNING: PL011 not found; "
                                 "bulk serial output disabled\n");
             }
-            sysbus_mmio_map(SYS_BUS_DEVICE(ser_dev), 0, 0x7d00a000ULL);
+            sysbus_mmio_map(SYS_BUS_DEVICE(ser_dev), 0, 0x7d100000ULL);
         }
     }
 
