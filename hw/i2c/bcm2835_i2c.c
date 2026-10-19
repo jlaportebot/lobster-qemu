@@ -28,6 +28,7 @@
 #include "qemu/log.h"
 #include "hw/i2c/bcm2835_i2c.h"
 #include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 
 static void bcm2835_i2c_update_interrupt(BCM2835I2CState *s)

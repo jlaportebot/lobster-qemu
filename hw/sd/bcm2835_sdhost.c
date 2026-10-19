@@ -13,10 +13,10 @@
 
 #include "qemu/osdep.h"
 #include "qemu/log.h"
-#include "qemu/module.h"
-#include "system/blockdev.h"
-#include "hw/irq.h"
+#include "qemu/osdep.h"
 #include "hw/sd/bcm2835_sdhost.h"
+#include "hw/irq.h"
+#include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "trace.h"
 #include "qom/object.h"
@@ -113,15 +113,12 @@ static void bcm2835_sdhost_send_command(BCM2835SDHostState *s)
 {
     SDRequest request;
     uint8_t rsp[16];
-    int rlen;
+    size_t rlen;
 
     request.cmd = s->cmd & SDCMD_CMD_MASK;
     request.arg = s->cmdarg;
 
     rlen = sdbus_do_command(&s->sdbus, &request, rsp);
-    if (rlen < 0) {
-        goto error;
-    }
     if (!(s->cmd & SDCMD_NO_RESPONSE)) {
         if (rlen == 0 || (rlen == 4 && (s->cmd & SDCMD_LONG_RESPONSE))) {
             goto error;

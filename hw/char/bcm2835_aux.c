@@ -296,9 +296,9 @@ static const Property bcm2835_aux_props[] = {
     DEFINE_PROP_CHR("chardev", BCM2835AuxState, chr),
 };
 
-static void bcm2835_aux_class_init(ObjectClass *oc, void *data)
+static void bcm2835_aux_class_init(ObjectClass *klass, void *data)
 {
-    DeviceClass *dc = DEVICE_CLASS(oc);
+    DeviceClass *dc = DEVICE_CLASS(klass);
 
     dc->realize = bcm2835_aux_realize;
     dc->vmsd = &vmstate_bcm2835_aux;

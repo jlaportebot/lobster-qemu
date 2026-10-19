@@ -299,6 +299,16 @@ static void raspi5b_machine_init(MachineState *machine)
         }
     }
 
+    /* Create and map the LobsterOS audio device at 0x7d400000
+     * Guest pushes 16-bit mono PCM chunks; host plays them through
+     * QEMU's audio backend (PipeWire/ALSA/Pulse). */
+    {
+        DeviceState *audio_dev = sysbus_create_simple("lobster-audio", 0, NULL);
+        if (audio_dev) {
+            sysbus_mmio_map(SYS_BUS_DEVICE(audio_dev), 0, 0x7d400000ULL);
+        }
+    }
+
     /* For bare-metal kernels (no ARM64 Linux magic header), write a proper
      * bootloader using the Linux bootloader_aarch64 which sets up registers
      * and jumps to the kernel. This handles fixups correctly. */

@@ -19,6 +19,7 @@
 #include "hw/arm/boot.h"
 #include "hw/arm/bcm2836.h"
 #include "hw/arm/bcm2838.h"
+#include "hw/arm/bcm2712.h"
 #include "hw/arm/raspi_platform.h"
 #include "hw/registerfields.h"
 #include "qemu/error-report.h"
@@ -60,6 +61,7 @@ typedef enum RaspiProcessorId {
     PROCESSOR_ID_BCM2836 = 1,
     PROCESSOR_ID_BCM2837 = 2,
     PROCESSOR_ID_BCM2838 = 3,
+    PROCESSOR_ID_BCM2712 = 4,
 } RaspiProcessorId;
 
 static const struct {
@@ -70,6 +72,7 @@ static const struct {
     [PROCESSOR_ID_BCM2836] = {TYPE_BCM2836, BCM283X_NCPUS},
     [PROCESSOR_ID_BCM2837] = {TYPE_BCM2837, BCM283X_NCPUS},
     [PROCESSOR_ID_BCM2838] = {TYPE_BCM2838, BCM283X_NCPUS},
+    [PROCESSOR_ID_BCM2712] = {TYPE_BCM2712, BCM283X_NCPUS},
 };
 
 uint64_t board_ram_size(uint32_t board_rev)

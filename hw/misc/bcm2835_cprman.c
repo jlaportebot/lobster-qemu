@@ -774,6 +774,17 @@ static void cprman_realize(DeviceState *dev, Error **errp)
             return;
         }
     }
+
+    /* Set default UART clock mux to enabled with XOSC source (~3MHz) */
+    /* CM_UARTCTL (0x0f0): ENABLE=1, SRC=1 (XOSC) */
+    s->regs[R_CM_UARTCTL / sizeof(uint32_t)] = CPRMAN_PASSWORD << 24 | (1 << 4) | 1;
+    /* CM_UARTDIV (0x0f4): divider for ~3MHz from 19.2MHz XOSC */
+    /* div = 19.2/3 = 6.4 -> int=6, frac=0.4*4096=1638 */
+    s->regs[R_CM_UARTDIV / sizeof(uint32_t)] = CPRMAN_PASSWORD << 24 | (6 << 12) | 1638;
+    /* Ensure XOSC clock is set before updating UART mux */
+    clock_update_hz(s->xosc, s->xosc_freq);
+    /* Trigger clock mux update for UART */
+    clock_mux_update(&s->clock_muxes[CPRMAN_CLOCK_UART]);
 }
 
 static const VMStateDescription cprman_vmstate = {
