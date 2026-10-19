@@ -37,6 +37,9 @@ system_ss.add(when: 'CONFIG_SIFIVE_U_PRCI', if_true: files('sifive_u_prci.c'))
 
 subdir('macio')
 
+# LobsterOS input device (always built for aarch64 raspi)
+system_ss.add(when: ['CONFIG_RASPI', 'TARGET_AARCH64'], if_true: files('lobster_input.c', 'lobster_net.c', 'lobster_serial.c', 'lobster_disk.c', 'lobster_share.c'))
+
 # ivshmem devices
 system_ss.add(when: 'CONFIG_IVSHMEM_DEVICE', if_true: files('ivshmem-pci.c'))
 system_ss.add(when: 'CONFIG_IVSHMEM_FLAT_DEVICE', if_true: files('ivshmem-flat.c'))
