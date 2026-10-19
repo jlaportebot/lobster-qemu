@@ -37,6 +37,7 @@ void qemu_input_handler_unregister(QemuInputHandlerState *s);
 void qemu_input_handler_bind(QemuInputHandlerState *s,
                              const char *device_id, int head,
                              Error **errp);
+void qemu_input_handler_bind_console(QemuInputHandlerState *s, QemuConsole *con);
 void qemu_input_event_send(QemuConsole *src, InputEvent *evt);
 void qemu_input_event_send_impl(QemuConsole *src, InputEvent *evt);
 void qemu_input_event_sync(void);

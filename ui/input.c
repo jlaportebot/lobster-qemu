@@ -97,6 +97,11 @@ void qemu_input_handler_bind(QemuInputHandlerState *s,
     s->con = con;
 }
 
+void qemu_input_handler_bind_console(QemuInputHandlerState *s, QemuConsole *con)
+{
+    s->con = con;
+}
+
 static QemuInputHandlerState*
 qemu_input_find_handler(uint32_t mask, QemuConsole *con)
 {

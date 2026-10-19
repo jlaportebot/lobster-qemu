@@ -1859,3 +1859,42 @@ SRST
   List event channels in the guest
 ERST
 #endif
+
+    {
+        .name       = "lmouse",
+        .args_type  = "x:i,y:i",
+        .params     = "x y",
+        .help       = "move LobsterOS guest mouse to absolute x,y",
+        .cmd        = hmp_lmouse,
+    },
+
+SRST
+``lmouse`` *x* *y*
+  Teleport the LobsterOS guest mouse to absolute guest coordinates.
+ERST
+
+    {
+        .name       = "lclick",
+        .args_type  = "press:i?",
+        .params     = "[press]",
+        .help       = "LobsterOS guest mouse button 1 press (default) or release (0)",
+        .cmd        = hmp_lclick,
+    },
+
+SRST
+``lclick`` [*press*]
+  Press (default) or release (0) the LobsterOS guest mouse button 1.
+ERST
+
+    {
+        .name       = "lkey",
+        .args_type  = "scancode:s",
+        .params     = "scancode",
+        .help       = "LobsterOS guest key press+release by set-1 scancode (hex ok)",
+        .cmd        = hmp_lkey,
+    },
+
+SRST
+``lkey`` *scancode*
+  Send a key press+release to the LobsterOS guest by set-1 scancode.
+ERST

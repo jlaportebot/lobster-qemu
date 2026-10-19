@@ -14,6 +14,7 @@
  */
 
 #include "qemu/osdep.h"
+#include "hw/misc/lobster_input_hmp.h"
 #ifdef CONFIG_SPICE
 #include <spice/enums.h>
 #endif
@@ -476,4 +477,26 @@ void hmp_client_migrate_info(Monitor *mon, const QDict *qdict)
                             has_port, port, has_tls_port, tls_port,
                             cert_subject, &err);
     hmp_handle_error(mon, err);
+}
+
+
+/* ─── LobsterOS input injection (GUI test harness) ──────────────── */
+
+void hmp_lmouse(Monitor *mon, const QDict *qdict)
+{
+    int x = qdict_get_int(qdict, "x");
+    int y = qdict_get_int(qdict, "y");
+    lobster_input_hmp_mouse(x, y);
+}
+
+void hmp_lclick(Monitor *mon, const QDict *qdict)
+{
+    int press = qdict_get_try_int(qdict, "press", 1);
+    lobster_input_hmp_click(press);
+}
+
+void hmp_lkey(Monitor *mon, const QDict *qdict)
+{
+    long sc = strtol(qdict_get_str(qdict, "scancode"), NULL, 0);
+    lobster_input_hmp_key((uint8_t)sc);
 }

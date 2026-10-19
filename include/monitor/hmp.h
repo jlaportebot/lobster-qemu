@@ -90,6 +90,11 @@ void hmp_netdev_del(Monitor *mon, const QDict *qdict);
 void hmp_getfd(Monitor *mon, const QDict *qdict);
 void hmp_closefd(Monitor *mon, const QDict *qdict);
 void hmp_mouse_move(Monitor *mon, const QDict *qdict);
+
+/* LobsterOS input injection (GUI test harness) */
+void hmp_lmouse(Monitor *mon, const QDict *qdict);
+void hmp_lclick(Monitor *mon, const QDict *qdict);
+void hmp_lkey(Monitor *mon, const QDict *qdict);
 void hmp_mouse_button(Monitor *mon, const QDict *qdict);
 void hmp_mouse_set(Monitor *mon, const QDict *qdict);
 void hmp_sendkey(Monitor *mon, const QDict *qdict);
