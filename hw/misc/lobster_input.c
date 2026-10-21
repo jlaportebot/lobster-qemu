@@ -410,6 +410,15 @@ static void lobster_mmio_write(void *opaque, hwaddr offset,
         s->head = 0;
         s->tail = 0;
         break;
+    case 0x1C: /* ADVANCE_HEAD — guest consumed slot(s); set head index.
+                * Unlike CLEAR this preserves unconsumed events, so a
+                * multi-event burst is not lost when the guest drains one
+                * event per poll. */
+        s->head = (uint32_t)(val % LOBSTER_EVENT_COUNT);
+        if (s->tail == 0 && s->head == 0) {
+            /* nothing special; ring simply empty-looking */
+        }
+        break;
     default:
         break;
     }
