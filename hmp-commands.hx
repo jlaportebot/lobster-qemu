@@ -1888,13 +1888,15 @@ ERST
 
     {
         .name       = "lkey",
-        .args_type  = "scancode:s",
-        .params     = "scancode",
-        .help       = "LobsterOS guest key press+release by set-1 scancode (hex ok)",
+        .args_type  = "scancode:s,mods:s?",
+        .params     = "scancode [mods]",
+        .help       = "LobsterOS guest key press+release by set-1 scancode (hex ok); mods: shift,ctrl,alt",
         .cmd        = hmp_lkey,
     },
 
 SRST
-``lkey`` *scancode*
+``lkey`` *scancode* [*mods*]
   Send a key press+release to the LobsterOS guest by set-1 scancode.
+  Optional comma/space-separated *mods* (shift, ctrl, alt) sets the
+  event modifier flags — e.g. ``lkey 0x2E ctrl`` sends Ctrl+C.
 ERST

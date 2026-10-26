@@ -498,5 +498,17 @@ void hmp_lclick(Monitor *mon, const QDict *qdict)
 void hmp_lkey(Monitor *mon, const QDict *qdict)
 {
     long sc = strtol(qdict_get_str(qdict, "scancode"), NULL, 0);
-    lobster_input_hmp_key((uint8_t)sc);
+    /*
+     * Optional modifiers for Ctrl/Alt/Shift chords (harness tests need
+     * e.g. `lkey 0x2E ctrl` for Ctrl+C). Flags: bit0=shift, bit1=ctrl,
+     * bit2=alt — same layout the guest reads from the event ring.
+     */
+    int flags = 0;
+    if (qdict_haskey(qdict, "mods")) {
+        const char *mods = qdict_get_str(qdict, "mods");
+        if (strstr(mods, "shift")) flags |= 0x01;
+        if (strstr(mods, "ctrl"))  flags |= 0x02;
+        if (strstr(mods, "alt"))   flags |= 0x04;
+    }
+    lobster_input_hmp_key_flags((uint8_t)sc, (uint8_t)flags);
 }

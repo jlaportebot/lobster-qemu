@@ -566,12 +566,18 @@ void lobster_input_hmp_click(int press)
 
 void lobster_input_hmp_key(uint8_t scancode)
 {
+    lobster_input_hmp_key_flags(scancode, 0);
+}
+
+void lobster_input_hmp_key_flags(uint8_t scancode, uint8_t flags)
+{
     LobsterInputState *s = lobster_input_get();
     if (!s) {
         return;
     }
-    /* Guest protocol: type 3 = press, type 4 = release. */
-    LobsterEvent ev = { .type = 3, .flags = 0, .key = scancode };
+    /* Guest protocol: type 3 = press, type 4 = release. The flags carry the
+     * chord modifiers so tests can send Ctrl/Alt/Shift combinations. */
+    LobsterEvent ev = { .type = 3, .flags = flags, .key = scancode };
     push_event(s, ev);
     ev.type = 4;
     push_event(s, ev);
