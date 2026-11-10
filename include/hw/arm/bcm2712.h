@@ -36,10 +36,10 @@
 /* Raspberry Pi 5 board revision encoding.
  * Processor ID = 4 (BCM2712), not 3 (BCM2838) —
  * ensures board_soc_type() returns TYPE_BCM2712. */
-#define RPI5_BOARD_REV_2G  0xc04111 /* Pi 5 2GB */
-#define RPI5_BOARD_REV_4G  0xc84111 /* Pi 5 4GB */
-#define RPI5_BOARD_REV_8G  0xd04111 /* Pi 5 8GB */
-#define RPI5_BOARD_REV_16G 0xd84111 /* Pi 5 16GB */
+#define RPI5_BOARD_REV_2G  0xb04111 /* Pi 5 2GB  (memory field 3) */
+#define RPI5_BOARD_REV_4G  0xc04111 /* Pi 5 4GB  (memory field 4) */
+#define RPI5_BOARD_REV_8G  0xd04111 /* Pi 5 8GB  (memory field 5) */
+#define RPI5_BOARD_REV_16G 0xe04111 /* Pi 5 16GB (memory field 6) */
 
 #define TYPE_BCM2712 "bcm2712"
 

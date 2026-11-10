@@ -23,6 +23,7 @@
 #include "hw/char/pl011.h"
 #include "chardev/char-fe.h"
 #include "system/system.h"
+#include "hw/qdev-properties.h"
 #include <libfdt.h>
 #include <string.h>
 
@@ -76,12 +77,10 @@ static void raspi5_modify_dtb(const struct arm_boot_info *info, void *fdt)
         int uart_offset = fdt_node_offset_by_compatible(fdt, -1, "arm,pl011-axi");
         while (uart_offset >= 0) {
             const char *name = fdt_get_name(fdt, uart_offset, NULL);
-            warn_report("bcm2712 dtc: found PL011 node: %s", name ? name : "NULL");
             if (name && (strstr(name, "serial@30000") || strstr(name, "serial@34000") ||
                          strstr(name, "serial@38000") || strstr(name, "serial@3c000") ||
                          strstr(name, "serial@40000") || strstr(name, "serial@44000") ||
                          strstr(name, "serial@48000") || strstr(name, "serial@4c000"))) {
-                warn_report("bcm2712 dtc: disabling RP1 UART %s", name);
                 fdt_setprop_string(fdt, uart_offset, "status", "disabled");
             }
             uart_offset = fdt_node_offset_by_compatible(fdt, uart_offset, "arm,pl011-axi");
@@ -93,9 +92,7 @@ static void raspi5_modify_dtb(const struct arm_boot_info *info, void *fdt)
         int uart0_offset = fdt_node_offset_by_compatible(fdt, -1, "arm,pl011");
         while (uart0_offset >= 0) {
             const char *name = fdt_get_name(fdt, uart0_offset, NULL);
-            warn_report("bcm2712 dtc: found arm,pl011 node: %s", name ? name : "NULL");
             if (name && strstr(name, "serial@7d001000")) {
-                warn_report("bcm2712 dtc: fixing BCM2835 UART0 reg size");
                 /* /soc has #address-cells=1, #size-cells=1, so reg format: <addr size> */
                 uint32_t reg[2];
                 reg[0] = cpu_to_be32(0x7d001000);
@@ -147,13 +144,8 @@ static void raspi5_modify_dtb(const struct arm_boot_info *info, void *fdt)
         "brcm,bcm2712-iommuc",
         "brcm,bcm2712-genet",
         "brcm,bcm2712-xhci",
-        "brcm,bcm2712-hevc",
         "brcm,bcm2712-isp",
         "brcm,bcm2712-csi",
-        "brcm,bcm2712-rng200",
-        "brcm,bcm2712-thermal",
-        "brcm,bcm2712-dma",
-        "brcm,bcm2712-v3d",
         "raspberrypi,rpivid-vid-decoder",
         "raspberrypi,pispbe",
         "raspberrypi,rp1-cfe",
@@ -162,16 +154,22 @@ static void raspi5_modify_dtb(const struct arm_boot_info *info, void *fdt)
         "raspberrypi,rp1dpi",
     };
 
+    int removed_nodes = 0;
+
     for (int i = 0; i < ARRAY_SIZE(nodes_to_remove); i++) {
         const char *dev_str = nodes_to_remove[i];
 
         int offset = fdt_node_offset_by_compatible(fdt, -1, dev_str);
         while (offset >= 0) {
             if (!fdt_nop_node(fdt, offset)) {
-                warn_report("bcm2712 dtc: %s has been disabled!", dev_str);
+                removed_nodes++;
             }
             offset = fdt_node_offset_by_compatible(fdt, offset, dev_str);
         }
+    }
+    if (removed_nodes > 0 && getenv("LBST_VERBOSE_DT")) {
+        info_report("bcm2712 dtc: disabled %d unimplemented device node(s)",
+                    removed_nodes);
     }
 
     /* Explicitly disable L2 interrupt controllers by setting status=disabled
@@ -309,6 +307,22 @@ static void raspi5b_machine_init(MachineState *machine)
         }
     }
 
+    /* Create and map the LobsterOS system-control device at 0x7d500000
+     * Guest-initiated power off / reboot, host wall-clock time, and the
+     * VM manager's preferred resolution (LBST_RES=WxH). */
+    {
+        DeviceState *sys_dev = qdev_new("lobster-sys");
+        const char *res = getenv("LBST_RES");
+        unsigned int res_w = 0, res_h = 0;
+
+        if (res && sscanf(res, "%ux%u", &res_w, &res_h) == 2) {
+            qdev_prop_set_uint32(sys_dev, "width", res_w);
+            qdev_prop_set_uint32(sys_dev, "height", res_h);
+        }
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(sys_dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(sys_dev), 0, 0x7d500000ULL);
+    }
+
     /* For bare-metal kernels (no ARM64 Linux magic header), write a proper
      * bootloader using the Linux bootloader_aarch64 which sets up registers
      * and jumps to the kernel. This handles fixups correctly. */
@@ -369,24 +383,30 @@ static void raspi5b_machine_class_init(ObjectClass *oc, void *data)
     MachineClass *mc = MACHINE_CLASS(oc);
     RaspiBaseMachineClass *rmc = RASPI_BASE_MACHINE_CLASS(oc);
 
-    /* Default to 4GB model */
-    rmc->board_rev = RPI5_BOARD_REV_4G;
+    /* class_data carries the board revision; it selects the RAM size. */
+    rmc->board_rev = GPOINTER_TO_UINT(data);
     raspi_machine_class_common_init(mc, rmc->board_rev);
-    mc->desc = "Raspberry Pi 5B (revision 1.0)";
+    mc->desc = g_strdup_printf("Raspberry Pi 5B (%" PRIu64 " GB RAM)",
+                               board_ram_size(rmc->board_rev) / GiB);
     mc->auto_create_sdcard = true;
     mc->init = raspi5b_machine_init;
 }
 
-static const TypeInfo raspi5b_machine_type = {
-    .name           = TYPE_RASPI5B_MACHINE,
-    .parent         = TYPE_RASPI_BASE_MACHINE,
-    .instance_size  = sizeof(Raspi5bMachineState),
-    .class_init     = raspi5b_machine_class_init,
+#define RASPI5B_VARIANT(typename, rev)                 \
+    {                                                  \
+        .name           = MACHINE_TYPE_NAME(typename), \
+        .parent         = TYPE_RASPI_BASE_MACHINE,     \
+        .instance_size  = sizeof(Raspi5bMachineState), \
+        .class_init     = raspi5b_machine_class_init,  \
+        .class_data     = GUINT_TO_POINTER(rev),       \
+    }
+
+/* raspi5b is the 4 GB board; the -2g/-8g/-16g variants differ only in RAM. */
+static const TypeInfo raspi5b_machine_types[] = {
+    RASPI5B_VARIANT("raspi5b", RPI5_BOARD_REV_4G),
+    RASPI5B_VARIANT("raspi5b-2g", RPI5_BOARD_REV_2G),
+    RASPI5B_VARIANT("raspi5b-8g", RPI5_BOARD_REV_8G),
+    RASPI5B_VARIANT("raspi5b-16g", RPI5_BOARD_REV_16G),
 };
 
-static void raspi5b_machine_register_type(void)
-{
-    type_register_static(&raspi5b_machine_type);
-}
-
-type_init(raspi5b_machine_register_type)
+DEFINE_TYPES(raspi5b_machine_types)
