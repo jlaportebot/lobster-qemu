@@ -23,4 +23,5 @@ GTAGS
 
 # build outputs
 build-opt/
+build-dev/
 build/
