@@ -57,6 +57,15 @@ struct LobsterSysState {
     uint32_t rtc_nsec_latch;
     uint32_t hint_width;
     uint32_t hint_height;
+
+    /*
+     * Deterministic clock mode: when enabled, use a fixed base epoch +
+     * QEMU_CLOCK_VIRTUAL instead of QEMU_CLOCK_HOST. This makes the
+     * guest-visible time deterministic under -icount.
+     */
+    bool deterministic;
+    /* Fixed epoch to start from (UTC seconds) */
+    uint64_t base_epoch_secs;
 };
 
 enum {
@@ -95,9 +104,15 @@ static uint64_t lobster_sys_read(void *opaque, hwaddr offset, unsigned size)
     case REG_STATE:
         return s->guest_state;
     case REG_RTC_LO: {
-        int64_t ns = qemu_clock_get_ns(QEMU_CLOCK_HOST);
-        uint64_t secs = ns / NANOSECONDS_PER_SECOND;
-
+        uint64_t secs;
+        int64_t ns;
+        if (s->deterministic) {
+            ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+            secs = s->base_epoch_secs + (ns / NANOSECONDS_PER_SECOND);
+        } else {
+            ns = qemu_clock_get_ns(QEMU_CLOCK_HOST);
+            secs = ns / NANOSECONDS_PER_SECOND;
+        }
         s->rtc_hi_latch = secs >> 32;
         s->rtc_nsec_latch = ns % NANOSECONDS_PER_SECOND;
         return (uint32_t)secs;
@@ -170,6 +185,8 @@ static void lobster_sys_init(Object *obj)
 static const Property lobster_sys_properties[] = {
     DEFINE_PROP_UINT32("width", LobsterSysState, hint_width, 0),
     DEFINE_PROP_UINT32("height", LobsterSysState, hint_height, 0),
+    DEFINE_PROP_BOOL("deterministic", LobsterSysState, deterministic, false),
+    DEFINE_PROP_UINT64("base-epoch-secs", LobsterSysState, base_epoch_secs, 0),
 };
 
 static void lobster_sys_class_init(ObjectClass *oc, void *data)

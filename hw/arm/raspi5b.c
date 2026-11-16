@@ -27,13 +27,26 @@
 #include <libfdt.h>
 #include <string.h>
 
-#define TYPE_RASPI5B_MACHINE MACHINE_TYPE_NAME("raspi5b")
+/*
+ * Common parent of all raspi5b board variants, so that the state casts below
+ * are valid for every variant and not just the 4 GB one.
+ */
+#define TYPE_RASPI5B_MACHINE "raspi5b-base"
 OBJECT_DECLARE_SIMPLE_TYPE(Raspi5bMachineState, RASPI5B_MACHINE)
 
 struct Raspi5bMachineState {
     RaspiBaseMachineState parent_obj;
     BCM2712State soc;
+
+    /* Deterministic clock mode for the harness (E1.12) */
+    bool deterministic;
+
+    /* Log a summary of DT nodes disabled by modify_dtb (E1.5) */
+    bool verbose_dt;
 };
+
+/* Guest RTC origin in deterministic mode: 2021-01-01 00:00:00 UTC */
+#define LOBSTER_DETERMINISTIC_EPOCH_SECS 1609459200ULL
 
 /* Memory map for Pi 5:
  * 0x00000000 - 0x3fffffff: Low memory (1GB)
@@ -65,6 +78,19 @@ static int raspi5_add_memory_node(void *fdt, hwaddr mem_base, hwaddr mem_len)
 
     g_free(nodename);
     return ret;
+}
+
+/*
+ * modify_dtb only receives the generic boot info, which is embedded in the
+ * machine state; recover the machine from it instead of adding a
+ * board-specific field to struct arm_boot_info.
+ */
+static bool raspi5_verbose_dt(const struct arm_boot_info *info)
+{
+    RaspiBaseMachineState *base =
+        container_of(info, RaspiBaseMachineState, binfo);
+
+    return RASPI5B_MACHINE(base)->verbose_dt;
 }
 
 static void raspi5_modify_dtb(const struct arm_boot_info *info, void *fdt)
@@ -167,7 +193,8 @@ static void raspi5_modify_dtb(const struct arm_boot_info *info, void *fdt)
             offset = fdt_node_offset_by_compatible(fdt, offset, dev_str);
         }
     }
-    if (removed_nodes > 0 && getenv("LBST_VERBOSE_DT")) {
+    if (removed_nodes > 0 && (raspi5_verbose_dt(info) ||
+                              getenv("LBST_VERBOSE_DT"))) {
         info_report("bcm2712 dtc: disabled %d unimplemented device node(s)",
                     removed_nodes);
     }
@@ -319,6 +346,11 @@ static void raspi5b_machine_init(MachineState *machine)
             qdev_prop_set_uint32(sys_dev, "width", res_w);
             qdev_prop_set_uint32(sys_dev, "height", res_h);
         }
+        if (s->deterministic) {
+            qdev_prop_set_bit(sys_dev, "deterministic", true);
+            qdev_prop_set_uint64(sys_dev, "base-epoch-secs",
+                                 LOBSTER_DETERMINISTIC_EPOCH_SECS);
+        }
         sysbus_realize_and_unref(SYS_BUS_DEVICE(sys_dev), &error_fatal);
         sysbus_mmio_map(SYS_BUS_DEVICE(sys_dev), 0, 0x7d500000ULL);
     }
@@ -378,6 +410,47 @@ static void raspi5b_machine_init(MachineState *machine)
     }
 }
 
+static bool raspi5b_get_deterministic(Object *obj, Error **errp)
+{
+    Raspi5bMachineState *s = RASPI5B_MACHINE(obj);
+    return s->deterministic;
+}
+
+static void raspi5b_set_deterministic(Object *obj, bool val, Error **errp)
+{
+    Raspi5bMachineState *s = RASPI5B_MACHINE(obj);
+    s->deterministic = val;
+}
+
+static bool raspi5b_get_verbose_dt(Object *obj, Error **errp)
+{
+    Raspi5bMachineState *s = RASPI5B_MACHINE(obj);
+    return s->verbose_dt;
+}
+
+static void raspi5b_set_verbose_dt(Object *obj, bool val, Error **errp)
+{
+    Raspi5bMachineState *s = RASPI5B_MACHINE(obj);
+    s->verbose_dt = val;
+}
+
+static void raspi5b_base_class_init(ObjectClass *oc, void *data)
+{
+    /* Deterministic clock mode for the harness (E1.12) */
+    object_class_property_add_bool(oc, "deterministic",
+                                   raspi5b_get_deterministic,
+                                   raspi5b_set_deterministic);
+    object_class_property_set_description(oc, "deterministic",
+        "Enable deterministic clock mode for the harness (uses virtual clock)");
+
+    /* Verbose DT fixup logging (E1.5) */
+    object_class_property_add_bool(oc, "verbose-dt",
+                                   raspi5b_get_verbose_dt,
+                                   raspi5b_set_verbose_dt);
+    object_class_property_set_description(oc, "verbose-dt",
+        "Enable verbose logging of DT node removals");
+}
+
 static void raspi5b_machine_class_init(ObjectClass *oc, void *data)
 {
     MachineClass *mc = MACHINE_CLASS(oc);
@@ -395,14 +468,20 @@ static void raspi5b_machine_class_init(ObjectClass *oc, void *data)
 #define RASPI5B_VARIANT(typename, rev)                 \
     {                                                  \
         .name           = MACHINE_TYPE_NAME(typename), \
-        .parent         = TYPE_RASPI_BASE_MACHINE,     \
-        .instance_size  = sizeof(Raspi5bMachineState), \
+        .parent         = TYPE_RASPI5B_MACHINE,        \
         .class_init     = raspi5b_machine_class_init,  \
         .class_data     = GUINT_TO_POINTER(rev),       \
     }
 
 /* raspi5b is the 4 GB board; the -2g/-8g/-16g variants differ only in RAM. */
 static const TypeInfo raspi5b_machine_types[] = {
+    {
+        .name           = TYPE_RASPI5B_MACHINE,
+        .parent         = TYPE_RASPI_BASE_MACHINE,
+        .abstract       = true,
+        .instance_size  = sizeof(Raspi5bMachineState),
+        .class_init     = raspi5b_base_class_init,
+    },
     RASPI5B_VARIANT("raspi5b", RPI5_BOARD_REV_4G),
     RASPI5B_VARIANT("raspi5b-2g", RPI5_BOARD_REV_2G),
     RASPI5B_VARIANT("raspi5b-8g", RPI5_BOARD_REV_8G),
