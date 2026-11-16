@@ -23,7 +23,9 @@
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include "hw/sysbus.h"
+#include "hw/qdev-properties.h"
 #include "qom/object.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -58,6 +60,9 @@ struct LobsterShareState {
     DIR *list_dir;
     struct dirent *list_ent;
     uint64_t list_index;
+
+    /* Share directory path property (alternative to LBST_SHARE env var) */
+    char *dir;
 };
 
 enum {
@@ -266,13 +271,14 @@ static void lobster_share_realize(DeviceState *dev, Error **errp)
     s->status = 0;
     s->list_dir = NULL;
 
-    const char *dir = getenv("LBST_SHARE");
+    const char *dir = s->dir ? s->dir : getenv("LBST_SHARE");
     if (dir) {
         struct stat st;
         if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode)) {
             s->root = g_strdup(dir);
         } else {
-            fprintf(stderr, "[lobster-share] LBST_SHARE is not a directory: %s\n", dir);
+            warn_report("lobster-share: '%s' is not a directory, "
+                        "sharing disabled", dir);
         }
     }
 }
@@ -298,11 +304,16 @@ static void lobster_share_finalize(Object *obj)
     }
 }
 
+static const Property lobster_share_properties[] = {
+    DEFINE_PROP_STRING("dir", LobsterShareState, dir),
+};
+
 static void lobster_share_class_init(ObjectClass *oc, void *data)
 {
     DeviceClass *dc = DEVICE_CLASS(oc);
     dc->realize = lobster_share_realize;
     dc->desc = "LobsterOS shared folder (host directory over MMIO)";
+    device_class_set_props(dc, lobster_share_properties);
 }
 
 static const TypeInfo lobster_share_info = {
