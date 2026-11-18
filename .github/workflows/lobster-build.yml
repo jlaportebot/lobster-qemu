@@ -185,7 +185,8 @@ jobs:
           Write-Host "DLLs bundled:"; (Get-ChildItem "$d\bin\*.dll").Count
           # Git-for-Windows bash, not the MSYS2 mingw tree: msys64 is not on PATH here
           $env:PATH = "$d\bin;C:\Windows\System32;C:\Windows;C:\Program Files\Git\bin;C:\Program Files\Git\usr\bin"
-          bash .github/scripts/smoke.sh "$d\bin" "$env:RUNNER_TEMP\smoke-pkg"
+          & "C:\Program Files\Git\bin\bash.exe" .github/scripts/smoke.sh ("$d/bin" -replace "\\","/") ("$env:RUNNER_TEMP/smoke-pkg" -replace "\\","/")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload serial log on failure
         if: failure()
         uses: actions/upload-artifact@v4
