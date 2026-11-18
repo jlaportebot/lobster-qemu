@@ -207,15 +207,14 @@ jobs:
     needs: [linux, macos, windows]
     runs-on: ubuntu-24.04
     # Only lobster/main pushes (rolling pre-release) and lobster-v* tags
-    # (normal release). ci/** pushes produce workflow artifacts only,
-    # except a commit whose message contains "[publish-test]", which
-    # publishes to the throw-away tag qemu-ci-test.
+    # (normal release). ci/** pushes produce workflow artifacts only.
+    # Validated by a temporary [publish-test] condition on ci/** (run
+    # 44356212998 created a pre-release with 4 archives + SHA256SUMS),
+    # since removed together with that release.
     if: >-
       github.event_name == 'push' && (
         github.ref == 'refs/heads/lobster/main' ||
-        startsWith(github.ref, 'refs/tags/lobster-v') ||
-        (startsWith(github.ref, 'refs/heads/ci/') &&
-         contains(github.event.head_commit.message, '[publish-test]')))
+        startsWith(github.ref, 'refs/tags/lobster-v'))
     permissions:
       contents: write
     steps:
@@ -231,8 +230,6 @@ jobs:
         run: |
           if [ "$GITHUB_REF" = refs/heads/lobster/main ]; then
             .github/scripts/publish.sh qemu-nightly rolling archives
-          elif [[ "$GITHUB_REF" == refs/tags/lobster-v* ]]; then
-            .github/scripts/publish.sh "$GITHUB_REF_NAME" release archives
           else
-            .github/scripts/publish.sh qemu-ci-test rolling archives
+            .github/scripts/publish.sh "$GITHUB_REF_NAME" release archives
           fi
