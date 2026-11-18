@@ -17,6 +17,8 @@
 #include "hw/sysbus.h"
 #include "target/arm/cpu-qom.h"
 #include "target/arm/gtimer.h"
+#include "system/kvm.h"
+#include "hw/boards.h"
 
 static const Property bcm2836_enabled_cores_property =
     DEFINE_PROP_UINT32("enabled-cpus", BCM283XBaseState, enabled_cpus, 0);
@@ -25,11 +27,17 @@ static void bcm283x_base_init(Object *obj)
 {
     BCM283XBaseState *s = BCM283X_BASE(obj);
     BCM283XBaseClass *bc = BCM283X_BASE_GET_CLASS(obj);
+    const char *cpu_type = bc->cpu_type;
     int n;
 
+    if (bc->kvm_host_cpu && kvm_enabled()) {
+        /* KVM can only run the host CPU model; honour an explicit -cpu */
+        cpu_type = current_machine->cpu_type ?
+                   current_machine->cpu_type : ARM_CPU_TYPE_NAME("host");
+    }
+
     for (n = 0; n < bc->core_count; n++) {
-        object_initialize_child(obj, "cpu[*]", &s->cpu[n].core,
-                                bc->cpu_type);
+        object_initialize_child(obj, "cpu[*]", &s->cpu[n].core, cpu_type);
     }
     if (bc->core_count > 1) {
         qdev_property_add_static(DEVICE(obj), &bcm2836_enabled_cores_property);

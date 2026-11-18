@@ -209,6 +209,17 @@ void kvm_arm_pmu_init(ARMCPU *cpu);
 void kvm_arm_pmu_set_irq(ARMCPU *cpu, int irq);
 
 /**
+ * kvm_arm_timer_set_irq:
+ * @cpu: ARMCPU
+ * @ptimer: true for the EL1 physical timer, false for the virtual timer
+ * @intid: GIC INTID (16..31) the in-kernel timer should raise
+ *
+ * Move an architected timer to a non-default PPI. Must be called
+ * before the vCPU first runs, with the in-kernel GIC already created.
+ */
+void kvm_arm_timer_set_irq(ARMCPU *cpu, bool ptimer, int intid);
+
+/**
  * kvm_arm_pvtime_init:
  * @cpu: ARMCPU
  * @ipa: Per-vcpu guest physical base address of the pvtime structures
@@ -276,6 +287,11 @@ static inline void kvm_arm_pmu_set_irq(ARMCPU *cpu, int irq)
 }
 
 static inline void kvm_arm_pmu_init(ARMCPU *cpu)
+{
+    g_assert_not_reached();
+}
+
+static inline void kvm_arm_timer_set_irq(ARMCPU *cpu, bool ptimer, int intid)
 {
     g_assert_not_reached();
 }

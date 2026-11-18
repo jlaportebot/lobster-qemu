@@ -1745,6 +1745,22 @@ void kvm_arm_pmu_set_irq(ARMCPU *cpu, int irq)
     }
 }
 
+void kvm_arm_timer_set_irq(ARMCPU *cpu, bool ptimer, int intid)
+{
+    struct kvm_device_attr attr = {
+        .group = KVM_ARM_VCPU_TIMER_CTRL,
+        .addr = (intptr_t)&intid,
+        .attr = ptimer ? KVM_ARM_VCPU_TIMER_IRQ_PTIMER :
+                         KVM_ARM_VCPU_TIMER_IRQ_VTIMER,
+    };
+
+    if (!kvm_arm_set_device_attr(cpu, &attr, "timer")) {
+        error_report("failed to set irq for %s timer",
+                     ptimer ? "physical" : "virtual");
+        abort();
+    }
+}
+
 void kvm_arm_pvtime_init(ARMCPU *cpu, uint64_t ipa)
 {
     struct kvm_device_attr attr = {

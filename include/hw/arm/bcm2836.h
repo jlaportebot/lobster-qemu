@@ -51,6 +51,8 @@ struct BCM283XBaseClass {
     /*< public >*/
     const char *name;
     const char *cpu_type;
+    /* Use the machine's -cpu (default: host) instead of cpu_type under KVM */
+    bool kvm_host_cpu;
     unsigned core_count;
     hwaddr peri_base; /* Peripheral base address seen by the CPU */
     hwaddr ctrl_base; /* Interrupt controller and mailboxes etc. */
