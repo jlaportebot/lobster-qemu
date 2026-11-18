@@ -115,7 +115,6 @@ static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
 {
     LobsterInputState *s = LOBSTER_INPUT(dev);
 
-    fprintf(stderr, "[lobster-input] Mouse event received: type=%d\n", evt->type);
 
     switch (evt->type) {
     case INPUT_EVENT_KIND_REL: {
@@ -158,7 +157,6 @@ static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
             if (btn->button == INPUT_BUTTON_MIDDLE) btn_state &= ~0x04;
         }
 
-        fprintf(stderr, "[lobster-input] Button event: down=%d btn=%d state=0x%x\n", btn->down, btn->button, btn_state);
 
         ev.type = EV_MOUSE_BTN;
         ev.flags = s->modifiers;
@@ -187,12 +185,20 @@ static void lobster_mouse_sync(DeviceState *dev)
     push_event(s, ev);
 }
 
+static void lobster_input_set_modifier(LobsterInputState *s, uint8_t bit,
+                                       bool down)
+{
+    if (down) {
+        s->modifiers |= bit;
+    } else {
+        s->modifiers &= ~bit;
+    }
+}
+
 static void lobster_kbd_event(DeviceState *dev, QemuConsole *src,
                              InputEvent *evt)
 {
     LobsterInputState *s = LOBSTER_INPUT(dev);
-
-    fprintf(stderr, "[lobster-input] Keyboard event received: type=%d\n", evt->type);
 
     if (evt->type != INPUT_EVENT_KIND_KEY) {
         return;
@@ -201,25 +207,23 @@ static void lobster_kbd_event(DeviceState *dev, QemuConsole *src,
     InputKeyEvent *key = evt->u.key.data;
     int qcode = qemu_input_key_value_to_qcode(key->key);
 
-    fprintf(stderr, "[lobster-input] Key event: qcode=%d down=%d\n", qcode, key->down);
-
     /* Track modifier state */
     switch (qcode) {
     case Q_KEY_CODE_SHIFT:
     case Q_KEY_CODE_SHIFT_R:
-        if (key->down) s->modifiers |= LOBSTER_MOD_SHIFT; else s->modifiers &= ~LOBSTER_MOD_SHIFT;
+        lobster_input_set_modifier(s, LOBSTER_MOD_SHIFT, key->down);
         break;
     case Q_KEY_CODE_CTRL:
     case Q_KEY_CODE_CTRL_R:
-        if (key->down) s->modifiers |= LOBSTER_MOD_CTRL; else s->modifiers &= ~LOBSTER_MOD_CTRL;
+        lobster_input_set_modifier(s, LOBSTER_MOD_CTRL, key->down);
         break;
     case Q_KEY_CODE_ALT:
     case Q_KEY_CODE_ALT_R:
-        if (key->down) s->modifiers |= LOBSTER_MOD_ALT; else s->modifiers &= ~LOBSTER_MOD_ALT;
+        lobster_input_set_modifier(s, LOBSTER_MOD_ALT, key->down);
         break;
     case Q_KEY_CODE_META_R:
     case Q_KEY_CODE_META_L:
-        if (key->down) s->modifiers |= LOBSTER_MOD_GUI; else s->modifiers &= ~LOBSTER_MOD_GUI;
+        lobster_input_set_modifier(s, LOBSTER_MOD_GUI, key->down);
         break;
     default:
         break;
