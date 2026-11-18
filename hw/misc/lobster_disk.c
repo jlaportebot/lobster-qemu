@@ -21,10 +21,13 @@
  *   read:  write BLOCK=n, write CMD=1, poll STATUS==2, copy BLKBUF (512B)
  *   write: copy 512B into BLKBUF, write BLOCK=n, write CMD=2, poll STATUS
  *
- * The backing image comes from, in order: the -drive option
+ * The backing image comes from, in order: the "drive" property, which the
+ * board binds to the named backend
  *   -drive if=none,file=disk.img,format=raw,id=lobsterdisk
+ * (or which can be set directly, e.g. -global lobster-disk.drive=<id>),
  * the "diskimg" device property, or the LBST_DISKIMG environment variable
- * (absent = no media, MAGIC still reads.)
+ * (absent = no media, MAGIC still reads.) A read-only backend stays usable:
+ * reads work and the write command reports STATUS=3.
  *
  * Copyright (C) 2026 Mister Lobster
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -36,6 +39,7 @@
 #include "qemu/error-report.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
 #include "qom/object.h"
 #include "system/block-backend.h"
 #include "block/block.h"
@@ -61,6 +65,8 @@ struct LobsterDiskState {
     MemoryRegion mmio;
 
     BlockBackend *blk;  /* backing image, NULL = no media */
+    bool owns_blk;      /* opened by us (diskimg/env) rather than by qdev */
+    bool read_only;
     uint64_t num_blocks;
 
     uint8_t buf[LBST_BLKBUF_SIZE];
@@ -143,7 +149,13 @@ static void lobster_disk_write(void *opaque, hwaddr offset,
         }
         case CMD_WRITE: {
             int64_t pos = (int64_t)s->block * LBST_BLKBUF_SIZE;
-            int r = blk_pwrite(s->blk, pos, LBST_BLKBUF_SIZE, s->buf, 0);
+            int r;
+
+            if (s->read_only) {
+                s->status = 3;
+                break;
+            }
+            r = blk_pwrite(s->blk, pos, LBST_BLKBUF_SIZE, s->buf, 0);
             s->status = (r >= 0) ? 2 : 3;
             break;
         }
@@ -181,7 +193,7 @@ static const MemoryRegionOps lobster_disk_mmio_ops = {
 };
 
 /*
- * Open @path through the block layer and attach it to @dev.
+ * Open @path through the block layer.
  *
  * The format is pinned explicitly (qcow2 by extension, raw otherwise):
  * writable images must not rely on format probing, which QEMU restricts.
@@ -189,96 +201,100 @@ static const MemoryRegionOps lobster_disk_mmio_ops = {
  * unref'd here. Building a QDict instead of a json: pseudo-filename keeps
  * paths containing quotes or backslashes intact.
  */
-static BlockBackend *lobster_disk_open_image(DeviceState *dev,
-                                             const char *path, Error **errp)
+static BlockBackend *lobster_disk_open_image(const char *path, Error **errp)
 {
     const char *fmt = g_str_has_suffix(path, ".qcow2") ? "qcow2" : "raw";
     QDict *options = qdict_new();
-    BlockBackend *blk;
 
     qdict_put_str(options, "driver", fmt);
     qdict_put_str(options, "file.driver", "file");
     qdict_put_str(options, "file.filename", path);
 
-    blk = blk_new_open(NULL, NULL, options, BDRV_O_RDWR, errp);
-    if (!blk) {
-        return NULL;
-    }
-
-    /*
-     * Attach to this device so the backend joins the main AioContext
-     * (unattached backends never dispatch I/O).
-     */
-    if (blk_attach_dev(blk, dev) < 0) {
-        error_setg(errp, "cannot attach disk image '%s' to device", path);
-        blk_unref(blk);
-        return NULL;
-    }
-
-    /* Grant ourselves the permissions we opened with. */
-    if (blk_set_perm(blk, BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE,
-                     BLK_PERM_CONSISTENT_READ | BLK_PERM_WRITE, errp) < 0) {
-        blk_detach_dev(blk, dev);
-        blk_unref(blk);
-        return NULL;
-    }
-    return blk;
+    return blk_new_open(NULL, NULL, options, BDRV_O_RDWR, errp);
 }
 
-static BlockBackend *lobster_disk_resolve_media(LobsterDiskState *s,
-                                                DeviceState *dev)
+static void lobster_disk_open_fallback(LobsterDiskState *s)
 {
-    const char *path;
+    const char *path = s->diskimg ? s->diskimg : getenv("LBST_DISKIMG");
     Error *err = NULL;
-    BlockBackend *blk = blk_by_name("lobsterdisk");
 
-    if (blk) {
-        return blk;
-    }
-
-    path = s->diskimg ? s->diskimg : getenv("LBST_DISKIMG");
     if (!path) {
-        return NULL;
+        return;
     }
 
-    blk = lobster_disk_open_image(dev, path, &err);
-    if (!blk) {
+    s->blk = lobster_disk_open_image(path, &err);
+    if (!s->blk) {
         warn_report("lobster-disk: cannot open disk image '%s', "
                     "continuing without media: %s",
                     path, error_get_pretty(err));
         error_free(err);
+        return;
     }
-    return blk;
+    s->owns_blk = true;
+}
+
+static void lobster_disk_drop_media(LobsterDiskState *s)
+{
+    if (s->owns_blk) {
+        blk_unref(s->blk);
+        s->owns_blk = false;
+    }
+    s->blk = NULL;
 }
 
 static void lobster_disk_realize(DeviceState *dev, Error **errp)
 {
     LobsterDiskState *s = LOBSTER_DISK(dev);
-    BlockBackend *blk;
+    uint64_t perm = BLK_PERM_CONSISTENT_READ;
     int64_t len;
 
     s->status = 0;
 
     /*
      * Media resolution, in order:
-     *   1. A -drive if=none,id=lobsterdisk backend (classic QEMU block
-     *      options: qcow2 overlays, snapshots, savevm ...)
+     *   1. The "drive" property: the board binds a -drive if=none,
+     *      id=lobsterdisk backend to it (classic QEMU block options: qcow2
+     *      overlays, snapshots, savevm ...) and qdev attaches it for us.
      *   2. The diskimg device property
      *   3. The LBST_DISKIMG environment variable
      * 2 and 3 are opened through the block layer, so qcow2 works there too.
      */
-    blk = lobster_disk_resolve_media(s, dev);
-    if (!blk) {
+    if (!s->blk) {
+        lobster_disk_open_fallback(s);
+    }
+    if (!s->blk) {
         return;
     }
 
-    len = blk_getlength(blk);
-    if (len > 0) {
-        s->blk = blk;
-        s->num_blocks = (uint64_t)len / LBST_BLKBUF_SIZE;
-    } else if (blk_by_name("lobsterdisk") != blk) {
-        blk_unref(blk);
+    len = blk_getlength(s->blk);
+    if (len <= 0) {
+        lobster_disk_drop_media(s);
+        return;
     }
+
+    /*
+     * Attach so the backend joins the main AioContext (unattached backends
+     * never dispatch I/O); qdev already did so for the drive property.
+     */
+    if (s->owns_blk && blk_attach_dev(s->blk, dev) < 0) {
+        error_setg(errp, "cannot attach disk image to device");
+        lobster_disk_drop_media(s);
+        return;
+    }
+
+    s->read_only = !blk_supports_write_perm(s->blk);
+    if (!s->read_only) {
+        perm |= BLK_PERM_WRITE;
+    }
+    if (blk_set_perm(s->blk, perm, BLK_PERM_ALL, errp) < 0) {
+        if (s->owns_blk) {
+            blk_detach_dev(s->blk, dev);
+        }
+        lobster_disk_drop_media(s);
+        return;
+    }
+
+    s->num_blocks = (uint64_t)len / LBST_BLKBUF_SIZE;
 }
 
 static bool lobster_disk_vmstate_needed(void *opaque)
@@ -312,6 +328,7 @@ static void lobster_disk_init(Object *obj)
 }
 
 static const Property lobster_disk_properties[] = {
+    DEFINE_PROP_DRIVE("drive", LobsterDiskState, blk),
     DEFINE_PROP_STRING("diskimg", LobsterDiskState, diskimg),
 };
 

@@ -24,6 +24,9 @@
 #include "chardev/char-fe.h"
 #include "system/system.h"
 #include "hw/qdev-properties.h"
+#include "hw/qdev-properties-system.h"
+#include "hw/sysbus.h"
+#include "system/block-backend.h"
 #include <libfdt.h>
 #include <string.h>
 
@@ -308,10 +311,19 @@ static void raspi5b_machine_init(MachineState *machine)
      * Host-backed block device (backing image via LBST_DISKIMG env var):
      * one MMIO command per 512-byte block, read or write. */
     {
-        DeviceState *disk_dev = sysbus_create_simple("lobster-disk", 0, NULL);
-        if (disk_dev) {
-            sysbus_mmio_map(SYS_BUS_DEVICE(disk_dev), 0, 0x7d200000ULL);
+        DeviceState *disk_dev = qdev_new("lobster-disk");
+        BlockBackend *disk_blk = blk_by_name("lobsterdisk");
+
+        /*
+         * Bind the named backend through the drive property so qdev
+         * attaches it and the device can request its permissions.
+         */
+        if (disk_blk && !blk_get_attached_dev(disk_blk)) {
+            qdev_prop_set_drive_err(disk_dev, "drive", disk_blk,
+                                    &error_fatal);
         }
+        sysbus_realize_and_unref(SYS_BUS_DEVICE(disk_dev), &error_fatal);
+        sysbus_mmio_map(SYS_BUS_DEVICE(disk_dev), 0, 0x7d200000ULL);
     }
 
     /* Create and map the LobsterOS shared folder at 0x7d300000
