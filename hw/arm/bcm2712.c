@@ -16,6 +16,8 @@
 #include "hw/boards.h"
 #include "trace.h"
 #include "target/arm/cpu.h"
+#include "target/arm/kvm_arm.h"
+#include "system/kvm.h"
 
 /* GIC-400 interrupt assignments — defined in bcm2712_peripherals.h */
 #define GIC_SPI_INTERRUPT_TIMER0 64
@@ -41,6 +43,26 @@ static void bcm2712_gic_set_irq(void *opaque, int irq, int level)
     qemu_set_irq(qdev_get_gpio_in(DEVICE(&s->gic), irq), level);
 }
 
+/*
+ * Needs the CPUs realized and the in-kernel GIC created.  KVM would raise
+ * the physical/virtual timers on the architected INTIDs 30/27; the guest is
+ * wired for the TCG layout (PPI_TIMER/PPI_VTIMER), so move them there.
+ */
+static void bcm2712_kvm_cpu_post_init(BCM283XBaseState *s_base)
+{
+    for (int i = 0; i < 4; i++) {
+        ARMCPU *cpu = ARM_CPU(&s_base->cpu[i].core);
+
+        kvm_arm_timer_set_irq(cpu, true, GIC_NR_SGIS + PPI_TIMER);
+        kvm_arm_timer_set_irq(cpu, false, GIC_NR_SGIS + PPI_VTIMER);
+        if (!cpu->has_pmu) {
+            continue;
+        }
+        kvm_arm_pmu_set_irq(cpu, GIC_NR_SGIS + VIRTUAL_PMU_IRQ);
+        kvm_arm_pmu_init(cpu);
+    }
+}
+
 static void bcm2712_init(Object *obj)
 {
     BCM2712State *s = BCM2712(obj);
@@ -59,7 +81,8 @@ static void bcm2712_init(Object *obj)
      * Done in realize() not init() — at realize time the SoC's "ram"
      * link has been set by raspi_base_machine_init. */
 
-    object_initialize_child(obj, "gic", &s->gic, TYPE_ARM_GIC);
+    /* gic_class_name() is TYPE_ARM_GIC unless the GIC lives in the kernel */
+    object_initialize_child(obj, "gic", &s->gic, gic_class_name());
 
     memory_region_init(&s->sysbus_mr, obj, "bcm2712-scb-bus", 0x10000000);
 }
@@ -135,6 +158,39 @@ static void bcm2712_realize(DeviceState *dev, Error **errp)
                                     ipa40_dummy);
     }
 
+    /*
+     * The CPUs must exist before the GIC is realized: the in-kernel GIC
+     * under KVM has to be created after all vCPUs.
+     */
+    BCM283XBaseState *s_base = BCM283X_BASE(dev);
+    for (i = 0; i < 4; i++) {
+        ARMCPU *cpu = ARM_CPU(&s_base->cpu[i].core);
+
+        object_property_set_int(OBJECT(cpu), "mp-affinity", i, &error_abort);
+        if (object_property_find(OBJECT(cpu), "reset-cbar")) {
+            object_property_set_int(OBJECT(cpu), "reset-cbar",
+                                    BCM2712_GIC_CPU_BASE, &error_abort);
+        }
+        if (kvm_enabled()) {
+            if (object_property_find(OBJECT(cpu), "has_el3")) {
+                object_property_set_bool(OBJECT(cpu), "has_el3", false,
+                                         &error_abort);
+            }
+            if (object_property_find(OBJECT(cpu), "has_el2")) {
+                object_property_set_bool(OBJECT(cpu), "has_el2", false,
+                                         &error_abort);
+            }
+        }
+
+        /* Start all CPUs directly (PSCI CPU_ON not working yet) */
+        object_property_set_bool(OBJECT(cpu), "start-powered-off",
+                                 false, &error_abort);
+
+        if (!qdev_realize(DEVICE(cpu), NULL, errp)) {
+            return;
+        }
+    }
+
     /* Initialize GIC-400 */
     if (!object_property_set_uint(OBJECT(&s->gic), "revision", 2, &local_err)) {
         error_propagate(errp, local_err);
@@ -149,7 +205,9 @@ static void bcm2712_realize(DeviceState *dev, Error **errp)
         error_propagate(errp, local_err);
         return;
     }
-    if (!object_property_set_bool(OBJECT(&s->gic),
+    /* KVM guests run at EL1 and get no virtualization extensions */
+    if (!kvm_enabled() &&
+        !object_property_set_bool(OBJECT(&s->gic),
                                   "has-virtualization-extensions", true,
                                   &local_err)) {
         error_propagate(errp, local_err);
@@ -163,27 +221,17 @@ static void bcm2712_realize(DeviceState *dev, Error **errp)
     /* Map GIC-400 registers */
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->gic), 0, BCM2712_GIC_DIST_BASE);
     sysbus_mmio_map(SYS_BUS_DEVICE(&s->gic), 1, BCM2712_GIC_CPU_BASE);
-    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gic), 2, BCM2712_GIC_HYPERVISOR_BASE);
-    sysbus_mmio_map(SYS_BUS_DEVICE(&s->gic), 3, BCM2712_GIC_VIRTUAL_BASE);
+    if (!kvm_enabled()) {
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->gic), 2,
+                        BCM2712_GIC_HYPERVISOR_BASE);
+        sysbus_mmio_map(SYS_BUS_DEVICE(&s->gic), 3, BCM2712_GIC_VIRTUAL_BASE);
+    }
 
     gicdev = DEVICE(&s->gic);
 
-    /* Initialize and connect CPUs */
-    BCM283XBaseState *s_base = BCM283X_BASE(dev);
+    /* Connect CPUs to the GIC */
     for (i = 0; i < 4; i++) {
         ARMCPU *cpu = ARM_CPU(&s_base->cpu[i].core);
-
-        object_property_set_int(OBJECT(cpu), "mp-affinity", i, &error_abort);
-        object_property_set_int(OBJECT(cpu), "reset-cbar",
-                                BCM2712_GIC_CPU_BASE, &error_abort);
-
-        /* Start all CPUs directly (PSCI CPU_ON not working yet) */
-        object_property_set_bool(OBJECT(cpu), "start-powered-off",
-                                 false, &error_abort);
-
-        if (!qdev_realize(DEVICE(cpu), NULL, errp)) {
-            return;
-        }
 
         /* Connect CPU IRQ/FIQ/VIRQ/VFIQ to GIC */
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->gic), i,
@@ -195,9 +243,12 @@ static void bcm2712_realize(DeviceState *dev, Error **errp)
         sysbus_connect_irq(SYS_BUS_DEVICE(&s->gic), i + 12,
                            qdev_get_gpio_in(DEVICE(cpu), ARM_CPU_VFIQ));
 
-        /* Connect PPI maintenance */
-        sysbus_connect_irq(SYS_BUS_DEVICE(&s->gic), i + 16,
-                           qdev_get_gpio_in(gicdev, PPI(i, PPI_MAINTENANCE)));
+        /* Connect PPI maintenance (only exists with virtualization) */
+        if (!kvm_enabled()) {
+            sysbus_connect_irq(SYS_BUS_DEVICE(&s->gic), i + 16,
+                               qdev_get_gpio_in(gicdev,
+                                                PPI(i, PPI_MAINTENANCE)));
+        }
 
         /* Connect timers */
         qdev_connect_gpio_out(DEVICE(cpu), GTIMER_PHYS,
@@ -206,6 +257,16 @@ static void bcm2712_realize(DeviceState *dev, Error **errp)
                               qdev_get_gpio_in(gicdev, PPI(i, PPI_VTIMER)));
         qdev_connect_gpio_out(DEVICE(cpu), GTIMER_HYP,
                               qdev_get_gpio_in(gicdev, PPI(i, PPI_HYP_TIMER)));
+
+        if (kvm_enabled() && object_property_find(OBJECT(cpu), "pmu")) {
+            qdev_connect_gpio_out_named(DEVICE(cpu), "pmu-interrupt", 0,
+                                        qdev_get_gpio_in(gicdev,
+                                            PPI(i, VIRTUAL_PMU_IRQ)));
+        }
+    }
+
+    if (kvm_enabled()) {
+        bcm2712_kvm_cpu_post_init(s_base);
     }
 
     /* Connect peripherals to GIC */
@@ -287,6 +348,7 @@ static void bcm2712_class_init(ObjectClass *oc, void *data)
     BCM283XBaseClass *bc_base = BCM283X_BASE_CLASS(oc);
 
     bc_base->cpu_type = ARM_CPU_TYPE_NAME("cortex-a76");
+    bc_base->kvm_host_cpu = true;
     bc_base->core_count = 4;
     bc_base->peri_base = BCM2712_PERI_BASE;
     bc_base->ctrl_base = 0;
