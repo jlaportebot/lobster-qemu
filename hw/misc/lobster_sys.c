@@ -83,13 +83,15 @@ enum {
 
 static int32_t lobster_sys_tz_offset(void)
 {
-    time_t now = time(NULL);
-    struct tm local;
+    GDateTime *now = g_date_time_new_now_local();
+    int32_t offset_secs;
 
-    if (!localtime_r(&now, &local)) {
+    if (!now) {
         return 0;
     }
-    return (int32_t)local.tm_gmtoff;
+    offset_secs = g_date_time_get_utc_offset(now) / G_TIME_SPAN_SECOND;
+    g_date_time_unref(now);
+    return offset_secs;
 }
 
 static uint64_t lobster_sys_read(void *opaque, hwaddr offset, unsigned size)

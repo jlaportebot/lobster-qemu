@@ -48,8 +48,6 @@
 #include "migration/vmstate.h"
 #include "qobject/qdict.h"
 #include "qobject/qstring.h"
-#include <unistd.h>
-#include <fcntl.h>
 
 #define LOBSTER_DISK_MAGIC   0x4C44524B /* "LDRK" */
 
