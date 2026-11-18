@@ -27,10 +27,8 @@
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
 #include "qom/object.h"
-#include <dirent.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include "qemu/cutils.h"
+#include <glib/gstdio.h>
 
 #define LOBSTER_SHARE_MAGIC 0x4C534852 /* "LSHR" */
 
@@ -57,8 +55,7 @@ struct LobsterShareState {
     uint64_t result;
 
     /* LIST iteration state */
-    DIR *list_dir;
-    struct dirent *list_ent;
+    GDir *list_dir;
     uint64_t list_index;
 
     /* Share directory path property (alternative to LBST_SHARE env var) */
@@ -92,6 +89,12 @@ static char *ls_resolve(LobsterShareState *s, const char *guest_path)
     if (!s->root || guest_path[0] == '/') {
         return NULL;
     }
+#ifdef _WIN32
+    /* Backslashes and drive letters would escape the root on Windows. */
+    if (strchr(guest_path, '\\') || strchr(guest_path, ':')) {
+        return NULL;
+    }
+#endif
     /* Empty path = the share root itself. */
     if (guest_path[0] == '\0') {
         return g_strdup(s->root);
@@ -114,8 +117,12 @@ static void ls_do_stat(LobsterShareState *s)
 {
     char *path = ls_resolve(s, s->namebuf);
     if (!path) { s->status = 3; return; }
-    struct stat st;
-    if (stat(path, &st) != 0) { s->status = 3; g_free(path); return; }
+    GStatBuf st;
+    if (g_stat(path, &st) != 0) {
+        s->status = 3;
+        g_free(path);
+        return;
+    }
     s->result = (uint64_t)st.st_size;
     s->status = 1;
     g_free(path);
@@ -125,11 +132,12 @@ static void ls_do_read(LobsterShareState *s)
 {
     char *path = ls_resolve(s, s->namebuf);
     if (!path) { s->status = 3; return; }
-    int fd = open(path, O_RDONLY);
+    int fd = g_open(path, O_RDONLY | O_BINARY, 0);
     if (fd < 0) { s->status = 3; g_free(path); return; }
     uint32_t want = s->count;
     if (want > LS_DATA_SIZE) { want = LS_DATA_SIZE; }
-    ssize_t r = pread(fd, s->data, want, (off_t)s->offset);
+    ssize_t r = lseek(fd, (off_t)s->offset, SEEK_SET) < 0 ? -1 :
+                read(fd, s->data, want);
     close(fd);
     g_free(path);
     if (r < 0) { s->status = 3; return; }
@@ -142,25 +150,22 @@ static void ls_do_list(LobsterShareState *s)
     if (!s->list_dir) {
         char *path = ls_resolve(s, s->namebuf);
         if (!path) { s->status = 3; return; }
-        s->list_dir = opendir(path);
+        s->list_dir = g_dir_open(path, 0, NULL);
         g_free(path);
         if (!s->list_dir) { s->status = 3; return; }
         s->list_index = 0;
     }
     /* One entry per op call: copy name to NAMEBUF, RESULT=1 if entry. */
     for (;;) {
-        struct dirent *ent = readdir(s->list_dir);
-        if (!ent) {
-            closedir(s->list_dir);
+        const char *name = g_dir_read_name(s->list_dir);
+        if (!name) {
+            g_dir_close(s->list_dir);
             s->list_dir = NULL;
             s->status = 4; /* EOF */
             s->result = 0;
             return;
         }
-        if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) {
-            continue;
-        }
-        snprintf(s->namebuf, LS_NAMEBUF_SIZE, "%s", ent->d_name);
+        snprintf(s->namebuf, LS_NAMEBUF_SIZE, "%s", name);
         s->result = 1;
         s->status = 1;
         return;
@@ -171,11 +176,12 @@ static void ls_do_write(LobsterShareState *s)
 {
     char *path = ls_resolve(s, s->namebuf);
     if (!path) { s->status = 3; return; }
-    int fd = open(path, O_WRONLY | O_CREAT, 0644);
+    int fd = g_open(path, O_WRONLY | O_CREAT | O_BINARY, 0644);
     if (fd < 0) { s->status = 3; g_free(path); return; }
     uint32_t have = s->count;
     if (have > LS_DATA_SIZE) { have = LS_DATA_SIZE; }
-    ssize_t r = pwrite(fd, s->data, have, (off_t)s->offset);
+    ssize_t r = lseek(fd, (off_t)s->offset, SEEK_SET) < 0 ? -1 :
+                write(fd, s->data, have);
     close(fd);
     g_free(path);
     s->result = r > 0 ? (uint64_t)r : 0;
@@ -186,7 +192,7 @@ static void ls_do_create(LobsterShareState *s)
 {
     char *path = ls_resolve(s, s->namebuf);
     if (!path) { s->status = 3; return; }
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = g_open(path, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, 0644);
     g_free(path);
     if (fd < 0) { s->status = 3; return; }
     close(fd);
@@ -236,7 +242,7 @@ static void lobster_share_write(void *opaque, hwaddr offset,
     case REG_OFFSET:
         s->offset = val;
         if (val == 0 && s->list_dir) {
-            closedir(s->list_dir);
+            g_dir_close(s->list_dir);
             s->list_dir = NULL;
         }
         break;
@@ -273,8 +279,7 @@ static void lobster_share_realize(DeviceState *dev, Error **errp)
 
     const char *dir = s->dir ? s->dir : getenv("LBST_SHARE");
     if (dir) {
-        struct stat st;
-        if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+        if (g_file_test(dir, G_FILE_TEST_IS_DIR)) {
             s->root = g_strdup(dir);
         } else {
             warn_report("lobster-share: '%s' is not a directory, "
@@ -300,7 +305,7 @@ static void lobster_share_finalize(Object *obj)
     LobsterShareState *s = LOBSTER_SHARE(obj);
     g_free(s->root);
     if (s->list_dir) {
-        closedir(s->list_dir);
+        g_dir_close(s->list_dir);
     }
 }
 
