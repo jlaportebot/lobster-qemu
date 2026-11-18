@@ -57,6 +57,7 @@
 #include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
+#include <glib/gstdio.h>
 #include <ctype.h>
 
 #define TYPE_LOBSTER_NET "lobster-net"

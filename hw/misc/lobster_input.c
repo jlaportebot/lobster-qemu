@@ -55,10 +55,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(LobsterInputState, LOBSTER_INPUT)
 #define EV_KEY_RELEASE   4
 
 /* Modifier flag bits */
-#define MOD_SHIFT  0x01
-#define MOD_CTRL   0x02
-#define MOD_ALT    0x04
-#define MOD_GUI    0x08
+#define LOBSTER_MOD_SHIFT  0x01
+#define LOBSTER_MOD_CTRL   0x02
+#define LOBSTER_MOD_ALT    0x04
+#define LOBSTER_MOD_GUI    0x08
 
 typedef struct {
     uint8_t  type;
@@ -207,19 +207,19 @@ static void lobster_kbd_event(DeviceState *dev, QemuConsole *src,
     switch (qcode) {
     case Q_KEY_CODE_SHIFT:
     case Q_KEY_CODE_SHIFT_R:
-        if (key->down) s->modifiers |= MOD_SHIFT; else s->modifiers &= ~MOD_SHIFT;
+        if (key->down) s->modifiers |= LOBSTER_MOD_SHIFT; else s->modifiers &= ~LOBSTER_MOD_SHIFT;
         break;
     case Q_KEY_CODE_CTRL:
     case Q_KEY_CODE_CTRL_R:
-        if (key->down) s->modifiers |= MOD_CTRL; else s->modifiers &= ~MOD_CTRL;
+        if (key->down) s->modifiers |= LOBSTER_MOD_CTRL; else s->modifiers &= ~LOBSTER_MOD_CTRL;
         break;
     case Q_KEY_CODE_ALT:
     case Q_KEY_CODE_ALT_R:
-        if (key->down) s->modifiers |= MOD_ALT; else s->modifiers &= ~MOD_ALT;
+        if (key->down) s->modifiers |= LOBSTER_MOD_ALT; else s->modifiers &= ~LOBSTER_MOD_ALT;
         break;
     case Q_KEY_CODE_META_R:
     case Q_KEY_CODE_META_L:
-        if (key->down) s->modifiers |= MOD_GUI; else s->modifiers &= ~MOD_GUI;
+        if (key->down) s->modifiers |= LOBSTER_MOD_GUI; else s->modifiers &= ~LOBSTER_MOD_GUI;
         break;
     default:
         break;
