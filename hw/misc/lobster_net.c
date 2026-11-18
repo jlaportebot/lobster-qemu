@@ -57,13 +57,7 @@
 #include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <unistd.h>
 #include <ctype.h>
-#include <sys/wait.h>
 
 #define TYPE_LOBSTER_NET "lobster-net"
 OBJECT_DECLARE_SIMPLE_TYPE(LobsterNetState, LOBSTER_NET)
@@ -77,6 +71,8 @@ OBJECT_DECLARE_SIMPLE_TYPE(LobsterNetState, LOBSTER_NET)
 #define LOBSTER_MMIO_SIZE       (LOBSTER_RESP_OFFSET + LOBSTER_RESP_MAX)
 
 /* Status codes */
+#define LOBSTER_LIBC_DIR "/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/libc"
+
 #define NET_STATUS_IDLE         0
 #define NET_STATUS_FETCHING     1   /* also used for "compiling" */
 #define NET_STATUS_DONE        2
@@ -112,17 +108,18 @@ struct LobsterNetState {
 
 static void lobster_net_fetch(LobsterNetState *s)
 {
-    char cmd[8192];
     char url[LOBSTER_URL_MAX + 1];
     char token[768] = {0};
     const char *url_ptr = (const char *)s->url_buf;
     uint32_t url_len = s->url_len;
     int has_auth = 0;
 
-    /* When auth_mode is set, the buffer is "<token>\n<url>". Split on the
+    /*
+     * When auth_mode is set, the buffer is "<token>\n<url>". Split on the
      * first newline so we only ever append a fixed-format header to curl.
-     * Token characters are restricted to [A-Za-z0-9._-] to prevent any
-     * shell metacharacter from leaking into the popen() command line. */
+     * Token characters are restricted to [A-Za-z0-9._-] to keep the
+     * header value well-formed.
+     */
     if (s->auth_mode == 1) {
         uint32_t nl = 0;
         while (nl < s->url_len && s->url_buf[nl] != '\n') {
@@ -164,62 +161,66 @@ static void lobster_net_fetch(LobsterNetState *s)
         return;
     }
 
-    /* Build curl command: silent, show response code, follow redirects,
-     * write body to stdout, max-time 10s. Add optional auth header. */
-    if (has_auth) {
-        snprintf(cmd, sizeof(cmd),
-                 "curl -s -o /dev/stdout -w '\\n%%{http_code}'"
-                 " -L --max-time 10 -H 'Authorization: Bearer %s' '%s' 2>/dev/null",
-                 token, url);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-                 "curl -s -o /dev/stdout -w '\\n%%{http_code}'"
-                 " -L --max-time 10 '%s' 2>/dev/null",
-                 url);
-    }
-
-    FILE *fp = popen(cmd, "r");
-    if (!fp) {
+    /*
+     * Run curl directly (no shell): silent, body to a temp file (binary
+     * safe), HTTP code on stdout, follow redirects, max-time 10s.
+     */
+    char *body_path = NULL;
+    int body_fd = g_file_open_tmp("lobster_net_XXXXXX", &body_path, NULL);
+    if (body_fd < 0) {
         s->status = NET_STATUS_ERROR;
         s->resp_code = 0;
         s->resp_len = 0;
         return;
     }
+    close(body_fd);
 
-    /* Read response body + trailing HTTP code */
-    size_t total = fread(s->resp_buf, 1, LOBSTER_RESP_MAX - 16, fp);
-    pclose(fp);
-
-    /* The last line is the HTTP status code (curl -w format) */
-    s->resp_len = total;
-    s->resp_code = 200;  /* default */
-
-    /* Find the last newline — everything after it is the status code */
-    if (total > 0) {
-        int i;
-        for (i = total - 1; i >= 0; i--) {
-            if (s->resp_buf[i] == '\n') {
-                break;
-            }
-        }
-        if (i >= 0 && i < (int)total - 1) {
-            /* Parse HTTP code from the last line */
-            char code_str[16] = {0};
-            int code_start = i + 1;
-            int code_len = total - code_start;
-            if (code_len > 0 && code_len < 16) {
-                memcpy(code_str, &s->resp_buf[code_start], code_len);
-                code_str[code_len] = '\0';
-                s->resp_code = (uint32_t)atoi(code_str);
-                /* Body is everything BEFORE the separator newline that
-                 * curl's -w format adds ("
-%{http_code}"). code_start
-                 * points after that newline, which would leave one
-                 * spurious byte on every fetch (and break checksums). */
-                s->resp_len = i;
-            }
-        }
+    GPtrArray *argv = g_ptr_array_new_with_free_func(g_free);
+    const char *fixed[] = { "curl", "-s", "-o", body_path, "-w",
+                            "%{http_code}", "-L", "--max-time", "10" };
+    for (size_t k = 0; k < G_N_ELEMENTS(fixed); k++) {
+        g_ptr_array_add(argv, g_strdup(fixed[k]));
     }
+    if (has_auth) {
+        g_ptr_array_add(argv, g_strdup("-H"));
+        g_ptr_array_add(argv, g_strdup_printf("Authorization: Bearer %s",
+                                              token));
+    }
+    g_ptr_array_add(argv, g_strdup(url));
+    g_ptr_array_add(argv, NULL);
+
+    gchar *out = NULL;
+    GError *gerr = NULL;
+    gboolean spawned = g_spawn_sync(NULL, (char **)argv->pdata, NULL,
+                                    G_SPAWN_SEARCH_PATH |
+                                    G_SPAWN_STDERR_TO_DEV_NULL,
+                                    NULL, NULL, &out, NULL, NULL, &gerr);
+    g_ptr_array_free(argv, TRUE);
+    gchar *body = NULL;
+    gsize body_len = 0;
+    if (!spawned) {
+        g_error_free(gerr);
+    } else if (!g_file_get_contents(body_path, &body, &body_len, NULL)) {
+        body = NULL;
+    }
+    g_unlink(body_path);
+    g_free(body_path);
+    if (!spawned) {
+        s->status = NET_STATUS_ERROR;
+        s->resp_code = 0;
+        s->resp_len = 0;
+        g_free(out);
+        return;
+    }
+
+    body_len = MIN(body_len, LOBSTER_RESP_MAX - 16);
+    if (body) {
+        memcpy(s->resp_buf, body, body_len);
+    }
+    s->resp_len = body_len;
+    s->resp_code = out ? (uint32_t)atoi(out) : 0;
+    g_free(body);
+    g_free(out);
 
     s->status = NET_STATUS_DONE;
 
@@ -229,123 +230,122 @@ static void lobster_net_fetch(LobsterNetState *s)
 
 /* ─── Host-side C compilation via aarch64-linux-gnu-gcc ─────────── */
 
+static void lobster_net_compile_fail(LobsterNetState *s)
+{
+    s->status = NET_STATUS_ERROR;
+    s->resp_code = 1;
+    s->resp_len = 0;
+}
+
+/*
+ * Build the cross-compiler command:
+ * -ffreestanding: no hosted environment, no libc
+ * -nostdlib: no standard library link
+ * -static: fully static binary
+ * -Wl,-Ttext=0x10000000: place text at USER_CODE_START
+ * -Wl,--build-id=none: no build-id section
+ * -Wl,--nmagic: minimize file alignment (no 64KB page gaps)
+ * -O2: optimize for size
+ * The resulting binary is a static AArch64 ELF that runs at EL0.
+ */
+static gboolean lobster_net_run_gcc(const char *out_path, const char *src_path,
+                                    gchar **err_text, gint *exit_status)
+{
+    char *out_arg = g_strdup(out_path);
+    char *src_arg = g_strdup(src_path);
+    char *argv[] = {
+        (char *)"aarch64-linux-gnu-gcc",
+        (char *)"-ffreestanding", (char *)"-nostdlib", (char *)"-static",
+        (char *)"-O2", (char *)"-nostartfiles",
+        (char *)"-ffunction-sections", (char *)"-fdata-sections",
+        (char *)"-Wl,-Ttext=0x10000000", (char *)"-Wl,--build-id=none",
+        (char *)"-Wl,--nmagic", (char *)"-Wl,--gc-sections",
+        (char *)"-I" LOBSTER_LIBC_DIR "/include", (char *)"-L" LOBSTER_LIBC_DIR,
+        (char *)"-o", out_arg, src_arg, (char *)"-llobsterc", NULL
+    };
+    GError *gerr = NULL;
+    gboolean ok = g_spawn_sync(NULL, argv, NULL, G_SPAWN_SEARCH_PATH, NULL,
+                               NULL, NULL, err_text, exit_status, &gerr);
+
+    if (!ok) {
+        *err_text = g_strdup(gerr->message);
+        g_error_free(gerr);
+    }
+    g_free(out_arg);
+    g_free(src_arg);
+    return ok;
+}
+
 static void lobster_net_compile(LobsterNetState *s)
 {
-    char src_path[] = "/tmp/lobster_cc_XXXXXX.c";
-    char out_path[] = "/tmp/lobster_cc_XXXXXX.elf";
-    char err_path[] = "/tmp/lobster_cc_XXXXXX.err";
-    char cmd[1024];
-    int src_fd, out_fd, err_fd;
+    char *src_path = NULL;
+    char *out_path = NULL;
+    char *err_text = NULL;
+    gchar *elf = NULL;
+    gsize elf_size = 0;
+    gint exit_status = 0;
+    int src_fd = g_file_open_tmp("lobster_cc_XXXXXX.c", &src_path, NULL);
+    int out_fd = g_file_open_tmp("lobster_cc_XXXXXX.elf", &out_path, NULL);
 
-    /* Create temp files: mkstemps handles suffix after XXXXXX */
-    src_fd = mkstemps(src_path, 2);  /* suffix ".c" = 2 chars */
-    if (src_fd < 0) {
-        fprintf(stderr, "[lobster-net] compile: cannot create temp .c file (errno=%d)\n", errno);
-        s->status = NET_STATUS_ERROR;
-        s->resp_code = 1;
-        s->resp_len = 0;
-        return;
+    if (src_fd >= 0) {
+        ssize_t written = write(src_fd, s->url_buf, s->url_len);
+        close(src_fd);
+        if (written != (ssize_t)s->url_len) {
+            src_fd = -1;
+        }
     }
-
-    /* Write source code to temp file */
-    ssize_t written = write(src_fd, s->url_buf, s->url_len);
-    close(src_fd);
-    if (written != (ssize_t)s->url_len) {
-        fprintf(stderr, "[lobster-net] compile: short write to source file\n");
-        s->status = NET_STATUS_ERROR;
-        s->resp_code = 1;
-        s->resp_len = 0;
-        return;
+    if (out_fd >= 0) {
+        close(out_fd);
+    }
+    if (src_fd < 0 || out_fd < 0) {
+        fprintf(stderr, "[lobster-net] compile: cannot prepare temp files\n");
+        lobster_net_compile_fail(s);
+        goto out;
     }
 
     fprintf(stderr, "[lobster-net] compile: wrote %u bytes to %s\n",
             s->url_len, src_path);
 
-    /* Create temp output and error paths */
-    out_fd = mkstemps(out_path, 4);  /* suffix ".elf" = 4 chars */
-    err_fd = mkstemps(err_path, 4);  /* suffix ".err" = 4 chars */
-    if (out_fd < 0 || err_fd < 0) {
-        fprintf(stderr, "[lobster-net] compile: cannot create temp output files (out_fd=%d, err_fd=%d, errno=%d)\n",
-                out_fd, err_fd, errno);
-        s->status = NET_STATUS_ERROR;
-        s->resp_code = 1;
-        s->resp_len = 0;
-        unlink(src_path);
-        if (out_fd >= 0) close(out_fd);
-        if (err_fd >= 0) close(err_fd);
-        return;
-    }
-    close(out_fd);
-    close(err_fd);
-
-    /* Build cross-compiler command:
-     * -ffreestanding: no hosted environment, no libc
-     * -nostdlib: no standard library link
-     * -static: fully static binary
-     * -Wl,-Ttext=0x10000000: place text at USER_CODE_START
-     * -Wl,--build-id=none: no build-id section
-     * -Wl,--nmagic: minimize file alignment (no 64KB page gaps)
-     * -O2: optimize for size
-     * The resulting binary is a static AArch64 ELF that runs at EL0
-     */
-    snprintf(cmd, sizeof(cmd),
-             "aarch64-linux-gnu-gcc"
-             " -ffreestanding -nostdlib -static -O2 -nostartfiles"
-             " -ffunction-sections -fdata-sections"
-             " -Wl,-Ttext=0x10000000"
-             " -Wl,--build-id=none"
-             " -Wl,--nmagic"
-             " -Wl,--gc-sections"
-             " -I/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/libc/include"
-             " -L/mnt/data/sd-overflow/LobsterOS/lobster-os/tools/libc"
-             " -o %s %s -llobsterc 2>%s",
-             out_path, src_path, err_path);
-
-    fprintf(stderr, "[lobster-net] compile: running: %s\n", cmd);
-
-    int ret = system(cmd);
-
-    if (ret != 0) {
-        /* Compilation failed — read error and put it in response buffer */
-        FILE *efp = fopen(err_path, "r");
-        if (efp) {
-            size_t err_len = fread(s->resp_buf, 1, LOBSTER_RESP_MAX - 1, efp);
-            fclose(efp);
-            s->resp_buf[err_len] = '\0';
-            s->resp_len = err_len;
-        }
-        s->resp_code = 1;
-        s->status = NET_STATUS_ERROR;
-
-        fprintf(stderr, "[lobster-net] compile: FAILED (ret=%d)\n", ret);
-        /* Print error to QEMU stderr too */
-        if (s->resp_len > 0) {
+    if (!lobster_net_run_gcc(out_path, src_path, &err_text, &exit_status) ||
+        exit_status != 0) {
+        /* Compilation failed: hand the compiler diagnostics to the guest */
+        size_t err_len = err_text ? MIN(strlen(err_text), LOBSTER_RESP_MAX - 1)
+                                  : 0;
+        lobster_net_compile_fail(s);
+        memcpy(s->resp_buf, err_text, err_len);
+        s->resp_buf[err_len] = '\0';
+        s->resp_len = err_len;
+        fprintf(stderr, "[lobster-net] compile: FAILED (ret=%d)\n",
+                exit_status);
+        if (err_len > 0) {
             fprintf(stderr, "[lobster-net] compile error: %s\n",
                     (char *)s->resp_buf);
         }
-    } else {
-        /* Compilation succeeded — read ELF binary into response buffer */
-        FILE *ofp = fopen(out_path, "rb");
-        if (!ofp) {
-            s->status = NET_STATUS_ERROR;
-            s->resp_code = 1;
-            s->resp_len = 0;
-        } else {
-            size_t elf_size = fread(s->resp_buf, 1, LOBSTER_RESP_MAX, ofp);
-            fclose(ofp);
-            s->resp_len = elf_size;
-            s->resp_code = 0;
-            s->status = NET_STATUS_DONE;
-
-            fprintf(stderr, "[lobster-net] compile: OK, ELF %u bytes\n",
-                    s->resp_len);
-        }
+        goto out;
     }
 
-    /* Cleanup temp files */
-    unlink(src_path);
-    unlink(out_path);
-    unlink(err_path);
+    if (!g_file_get_contents(out_path, &elf, &elf_size, NULL)) {
+        lobster_net_compile_fail(s);
+        goto out;
+    }
+    elf_size = MIN(elf_size, LOBSTER_RESP_MAX);
+    memcpy(s->resp_buf, elf, elf_size);
+    s->resp_len = elf_size;
+    s->resp_code = 0;
+    s->status = NET_STATUS_DONE;
+    fprintf(stderr, "[lobster-net] compile: OK, ELF %u bytes\n", s->resp_len);
+
+out:
+    if (src_path) {
+        g_unlink(src_path);
+    }
+    if (out_path) {
+        g_unlink(out_path);
+    }
+    g_free(src_path);
+    g_free(out_path);
+    g_free(err_text);
+    g_free(elf);
 }
 
 /* ─── MMIO read/write handlers ──────────────────────────────────── */
