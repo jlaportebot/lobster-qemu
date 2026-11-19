@@ -1888,6 +1888,21 @@ SRST
 ERST
 
     {
+        .name       = "lwheel",
+        .args_type  = "dy:s,dx:s?",
+        .params     = "dy [dx]",
+        .help       = "LobsterOS guest mouse wheel: dy notches (+ up, - down), optional dx (+ right, - left)",
+        .cmd        = hmp_lwheel,
+    },
+
+SRST
+``lwheel`` *dy* [*dx*]
+  Send LobsterOS guest mouse wheel notches at the pointer: *dy* vertical
+  (positive up, negative down), optional *dx* horizontal (positive right,
+  negative left). Each axis is clamped to 10 notches per call.
+ERST
+
+    {
         .name       = "lkey",
         .args_type  = "scancode:s,mods:s?",
         .params     = "scancode [mods]",

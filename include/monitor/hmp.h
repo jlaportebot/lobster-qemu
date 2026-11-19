@@ -94,6 +94,7 @@ void hmp_mouse_move(Monitor *mon, const QDict *qdict);
 /* LobsterOS input injection (GUI test harness) */
 void hmp_lmouse(Monitor *mon, const QDict *qdict);
 void hmp_lclick(Monitor *mon, const QDict *qdict);
+void hmp_lwheel(Monitor *mon, const QDict *qdict);
 void hmp_lkey(Monitor *mon, const QDict *qdict);
 void hmp_mouse_button(Monitor *mon, const QDict *qdict);
 void hmp_mouse_set(Monitor *mon, const QDict *qdict);

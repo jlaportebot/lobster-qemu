@@ -495,6 +495,34 @@ void hmp_lclick(Monitor *mon, const QDict *qdict)
     lobster_input_hmp_click(press);
 }
 
+static bool lwheel_parse(Monitor *mon, const char *str, long *out)
+{
+    if (!str) {
+        *out = 0;
+        return true;
+    }
+    if (qemu_strtol(str, NULL, 0, out) < 0) {
+        monitor_printf(mon, "lwheel: invalid number '%s'\n", str);
+        return false;
+    }
+    return true;
+}
+
+void hmp_lwheel(Monitor *mon, const QDict *qdict)
+{
+    /*
+     * Strings, not ":i": the HMP integer parser rejects negative values
+     * ("integer is for 32-bit values"), and wheel-down is negative.
+     */
+    long dy;
+    long dx;
+
+    if (lwheel_parse(mon, qdict_get_str(qdict, "dy"), &dy) &&
+        lwheel_parse(mon, qdict_get_try_str(qdict, "dx"), &dx)) {
+        lobster_input_hmp_wheel(dy, dx);
+    }
+}
+
 void hmp_lkey(Monitor *mon, const QDict *qdict)
 {
     long sc = strtol(qdict_get_str(qdict, "scancode"), NULL, 0);

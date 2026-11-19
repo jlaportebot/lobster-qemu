@@ -8,7 +8,7 @@
  *
  * MMIO Layout (32-bit registers, little-endian):
  *   0x00  MAGIC       (read-only)  — 0x4C4F4231 ("LOB1")
- *   0x04  VERSION     (read-only)  — 0x00010000 (v1.0)
+ *   0x04  VERSION     (read-only)  — 0x00010100 (v1.1)
  *   0x08  BUF_SIZE    (read-only)  — ring capacity (32)
  *   0x0C  HEAD        (read-only)  — next slot to read (guest)
  *   0x10  TAIL        (read-only)  — next slot to write (host)
@@ -17,7 +17,9 @@
  *   0x20+ EVENT_DATA  — 32 × 16-byte event slots, starting here
  *
  * Event slot format (each 16 bytes):
- *   [0]    type  : 1=mouse_move, 2=mouse_btn, 3=key_press, 4=key_release
+ *   [0]    type  : 1=mouse_move, 2=mouse_btn, 3=key_press, 4=key_release,
+ *                  5=mouse_wheel (one per notch, on press only; dy +1 up /
+ *                  -1 down, dx -1 left / +1 right)
  *   [1]    flags : bit0=shift, bit1=ctrl, bit2=alt, bit3=gui
  *   [2..3] x/y   : mouse x/y (absolute, 0..0x7FFF range, scaled)
  *   [4..5] dx/dy : mouse delta (for move events)
@@ -43,7 +45,7 @@
 OBJECT_DECLARE_SIMPLE_TYPE(LobsterInputState, LOBSTER_INPUT)
 
 #define LOBSTER_INPUT_MAGIC   0x4C4F4231u  /* "LOB1" */
-#define LOBSTER_INPUT_VERSION 0x00010000u  /* 1.0 */
+#define LOBSTER_INPUT_VERSION 0x00010100u  /* 1.1 */
 #define LOBSTER_EVENT_COUNT   32
 #define LOBSTER_EVENT_SIZE    16
 #define LOBSTER_MMIO_SIZE     (0x20 + LOBSTER_EVENT_COUNT * LOBSTER_EVENT_SIZE)
@@ -53,6 +55,10 @@ OBJECT_DECLARE_SIMPLE_TYPE(LobsterInputState, LOBSTER_INPUT)
 #define EV_MOUSE_BTN    2
 #define EV_KEY_PRESS     3
 #define EV_KEY_RELEASE   4
+#define EV_MOUSE_WHEEL   5
+
+/* Most notches one HMP lwheel call may queue per axis */
+#define LOBSTER_WHEEL_MAX_NOTCHES 10
 
 /* Modifier flag bits */
 #define LOBSTER_MOD_SHIFT  0x01
@@ -101,6 +107,9 @@ struct LobsterInputState {
     /* Modifier state */
     uint8_t modifiers;
 
+    /* Current mouse button bitmask (LOBSTER_BTN_*) */
+    uint8_t btn_state;
+
     /* QEMU input handler state */
     QemuInputHandlerState *mouse_handler;
     QemuInputHandlerState *kbd_handler;
@@ -120,6 +129,39 @@ static void push_event(LobsterInputState *s, LobsterEvent ev)
 }
 
 /* ─── QEMU input handler callbacks ──────────────────────────────── */
+
+/* Returns true if @button is a wheel pseudo-button (and queues the notch) */
+static bool lobster_input_wheel(LobsterInputState *s, InputButton button,
+                                bool down)
+{
+    LobsterEvent ev = {
+        .type = EV_MOUSE_WHEEL, .flags = s->modifiers,
+        .x = (uint16_t)(s->abs_x & 0xFFFF),
+        .y = (uint16_t)(s->abs_y & 0xFFFF),
+        .btn = s->btn_state,
+    };
+
+    switch (button) {
+    case INPUT_BUTTON_WHEEL_UP:
+        ev.dy = 1;
+        break;
+    case INPUT_BUTTON_WHEEL_DOWN:
+        ev.dy = -1;
+        break;
+    case INPUT_BUTTON_WHEEL_LEFT:
+        ev.dx = -1;
+        break;
+    case INPUT_BUTTON_WHEEL_RIGHT:
+        ev.dx = 1;
+        break;
+    default:
+        return false;
+    }
+    if (down) {
+        push_event(s, ev);
+    }
+    return true;
+}
 
 static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
                                 InputEvent *evt)
@@ -156,9 +198,11 @@ static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
         InputBtnEvent *btn = evt->u.btn.data;
         LobsterEvent ev = {0};
 
-        /* Get current button state */
-        static uint8_t btn_state = 0;
         uint8_t bit;
+
+        if (lobster_input_wheel(s, btn->button, btn->down)) {
+            break;
+        }
 
         switch (btn->button) {
         case INPUT_BUTTON_LEFT:
@@ -176,9 +220,9 @@ static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
         }
 
         if (btn->down) {
-            btn_state |= bit;
+            s->btn_state |= bit;
         } else {
-            btn_state &= (uint8_t) ~bit;
+            s->btn_state &= (uint8_t) ~bit;
         }
 
 
@@ -186,7 +230,7 @@ static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
         ev.flags = s->modifiers;
         ev.x = (uint16_t)(s->abs_x & 0xFFFF);
         ev.y = (uint16_t)(s->abs_y & 0xFFFF);
-        ev.btn = btn_state;
+        ev.btn = s->btn_state;
         push_event(s, ev);
         break;
     }
@@ -469,6 +513,7 @@ static void lobster_input_realize(DeviceState *dev, Error **errp)
     /* Initialize ring buffer */
     s->head = 0;
     s->tail = 0;
+    s->btn_state = 0;
     s->abs_x = 960;   /* Center of 1920 wide */
     s->abs_y = 540;   /* Center of 1080 tall */
     s->max_x = 1919;
@@ -595,6 +640,39 @@ void lobster_input_hmp_click(int press)
         .btn = (uint8_t)(press & LOBSTER_BTN_MASK),
     };
     push_event(s, ev);
+}
+
+static void lobster_input_hmp_wheel_axis(LobsterInputState *s, long count,
+                                         bool horizontal)
+{
+    int notches = MIN(labs(count), LOBSTER_WHEEL_MAX_NOTCHES);
+    int step = count < 0 ? -1 : 1;
+
+    for (int i = 0; i < notches; i++) {
+        LobsterEvent ev = {
+            .type = EV_MOUSE_WHEEL, .flags = s->modifiers,
+            .x = (uint16_t)(s->abs_x & 0xFFFF),
+            .y = (uint16_t)(s->abs_y & 0xFFFF),
+            .btn = s->btn_state,
+        };
+        if (horizontal) {
+            ev.dx = step;
+        } else {
+            ev.dy = step;
+        }
+        push_event(s, ev);
+    }
+}
+
+void lobster_input_hmp_wheel(long dy, long dx)
+{
+    LobsterInputState *s = lobster_input_get();
+
+    if (!s) {
+        return;
+    }
+    lobster_input_hmp_wheel_axis(s, dy, false);
+    lobster_input_hmp_wheel_axis(s, dx, true);
 }
 
 void lobster_input_hmp_key(uint8_t scancode)
