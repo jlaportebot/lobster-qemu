@@ -124,6 +124,28 @@ jobs:
           done
           echo "otool: only @rpath/system references"
           codesign --verify --verbose "$d/bin/qemu-system-aarch64"
+          # sdl2 is sdl2-compat, which dlopen()s libSDL3 at load time (invisible
+          # to otool -L). Take every Homebrew SDL out of dlopen's reach: unlink
+          # drops the lib/ symlinks, moving opt/ and Cellar/ drops the paths
+          # sdl2-compat also probes, so only the bundled lib/libSDL3 can load.
+          brew_prefix=$(brew --prefix)
+          hidden="$RUNNER_TEMP/hidden-sdl"; mkdir -p "$hidden"
+          brew unlink sdl3 sdl2 sdl2-compat || true
+          for k in sdl3 sdl2 sdl2-compat; do
+            for sub in opt Cellar; do
+              if [ -e "$brew_prefix/$sub/$k" ] || [ -L "$brew_prefix/$sub/$k" ]; then
+                mv "$brew_prefix/$sub/$k" "$hidden/$sub-$k"
+              fi
+            done
+          done
+          echo "Homebrew/system SDL libs still visible (must be empty):"
+          find "$brew_prefix" /usr/local/lib -name 'libSDL*' 2>/dev/null || true
+          echo "libSDL3 loaded by the archive's qemu:"
+          DYLD_PRINT_LIBRARIES=1 "$d/bin/qemu-system-aarch64" --version 2>&1 \
+            | grep -i 'libSDL' | tee "$RUNNER_TEMP/sdl-loaded.txt" || true
+          if ! grep -q "$d/lib/libSDL3.dylib" "$RUNNER_TEMP/sdl-loaded.txt"; then
+            echo "libSDL3 was not loaded from inside the archive"; exit 1
+          fi
           # brew prefix removed from PATH for the run
           env -i PATH=/usr/bin:/bin BOOT_TIMEOUT=240 \
             .github/scripts/smoke.sh "$d/bin" "$RUNNER_TEMP/smoke-pkg"

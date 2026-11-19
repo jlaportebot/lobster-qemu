@@ -46,24 +46,52 @@ def resolve(dep):
     sys.exit("cannot resolve " + dep)
 
 
-queue = [os.path.join(bindir, f) for f in sorted(os.listdir(bindir))]
+SDL2_COMPAT = "libSDL2-2.0.0.dylib"
+SDL3_SRC = "libSDL3.0.dylib"
+# sdl2-compat dlopen()s this unversioned name via @loader_path (our lib/)
+SDL3 = "libSDL3.dylib"
+
+
+def bundle_lib(src, name, bundled, queue):
+    """Copy one dylib into lib/ with an @rpath id; queue it for its own deps."""
+    dst = os.path.join(libdir, name)
+    shutil.copy(src, dst)
+    os.chmod(dst, 0o755)
+    run("install_name_tool", "-id", "@rpath/" + name, dst)
+    run("install_name_tool", "-add_rpath", "@loader_path", dst)
+    bundled[name] = dst
+    queue.append(dst)
+
+
+def walk(queue, bundled):
+    while queue:
+        f = queue.pop()
+        is_exe = os.path.dirname(f) == bindir
+        for dep in deps(f):
+            name = os.path.basename(dep)
+            if name not in bundled:
+                bundle_lib(resolve(dep), name, bundled, queue)
+            run("install_name_tool", "-change", dep, "@rpath/" + name, f)
+        if is_exe:
+            run("install_name_tool", "-add_rpath", "@executable_path/../lib", f)
+
+
+def sdl3_dylib():
+    """Path of Homebrew's libSDL3, which sdl2-compat dlopen()s (not in otool -L)."""
+    proc = subprocess.run(["brew", "--prefix", "sdl3"], capture_output=True, text=True)
+    cand = os.path.join(proc.stdout.strip(), "lib", SDL3_SRC)
+    return os.path.realpath(cand) if proc.returncode == 0 and os.path.exists(cand) else None
+
+
 bundled = {}
-while queue:
-    f = queue.pop()
-    is_exe = os.path.dirname(f) == bindir
-    for dep in deps(f):
-        name = os.path.basename(dep)
-        if name not in bundled:
-            dst = os.path.join(libdir, name)
-            shutil.copy(resolve(dep), dst)
-            os.chmod(dst, 0o755)
-            run("install_name_tool", "-id", "@rpath/" + name, dst)
-            run("install_name_tool", "-add_rpath", "@loader_path", dst)
-            bundled[name] = dst
-            queue.append(dst)
-        run("install_name_tool", "-change", dep, "@rpath/" + name, f)
-    if is_exe:
-        run("install_name_tool", "-add_rpath", "@executable_path/../lib", f)
+walk([os.path.join(bindir, f) for f in sorted(os.listdir(bindir))], bundled)
+if SDL2_COMPAT in bundled and SDL3 not in bundled:
+    sdl3 = sdl3_dylib()
+    if sdl3 is None:
+        sys.exit("sdl2-compat is bundled but Homebrew sdl3 was not found")
+    extra = []
+    bundle_lib(sdl3, SDL3, bundled, extra)
+    walk(extra, bundled)
 
 for f in glob.glob(os.path.join(out, "bin", "*")) + glob.glob(os.path.join(libdir, "*")):
     run("codesign", "--force", "--sign", "-", f)
