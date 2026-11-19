@@ -11,7 +11,7 @@
  *
  * MMIO layout (little-endian, 32-bit registers):
  *   0x00  MAGIC      (r)  0x4C535953 ("LSYS")
- *   0x04  VERSION    (r)  0x00010000
+ *   0x04  VERSION    (r)  0x00010100
  *   0x08  POWER      (w)  1 = power off, 2 = reboot
  *   0x0C  STATE      (rw) guest lifecycle state, free-form (0 boot, 1 desktop,
  *                         2 shutting down); visible to the host via `xp`
@@ -21,6 +21,7 @@
  *   0x1C  RTC_NSEC   (r)  nanoseconds within the latched second
  *   0x20  HINT_WIDTH (r)  preferred framebuffer width  (0 = no preference)
  *   0x24  HINT_HEIGHT(r)  preferred framebuffer height (0 = no preference)
+ *   0x28  ENTROPY    (r)  32 fresh random bits from the host on every read
  *
  * The display hint comes from the "width"/"height" device properties, which
  * raspi5b.c fills from the LBST_RES=WxH environment variable.
@@ -32,6 +33,7 @@
 #include "qemu/osdep.h"
 #include "qemu/module.h"
 #include "qemu/timer.h"
+#include "qemu/guest-random.h"
 #include "qapi/error.h"
 #include "hw/sysbus.h"
 #include "hw/qdev-properties.h"
@@ -39,7 +41,7 @@
 #include "qom/object.h"
 
 #define LOBSTER_SYS_MAGIC   0x4C535953 /* "LSYS" */
-#define LOBSTER_SYS_VERSION 0x00010000
+#define LOBSTER_SYS_VERSION 0x00010100
 
 #define LOBSTER_SYS_POWER_OFF    1
 #define LOBSTER_SYS_POWER_REBOOT 2
@@ -79,6 +81,7 @@ enum {
     REG_RTC_NSEC    = 0x1C,
     REG_HINT_WIDTH  = 0x20,
     REG_HINT_HEIGHT = 0x24,
+    REG_ENTROPY     = 0x28,
 };
 
 static int32_t lobster_sys_tz_offset(void)
@@ -129,6 +132,13 @@ static uint64_t lobster_sys_read(void *opaque, hwaddr offset, unsigned size)
         return s->hint_width;
     case REG_HINT_HEIGHT:
         return s->hint_height;
+    case REG_ENTROPY: {
+        uint32_t bits;
+
+        /* Honours -seed, so deterministic runs stay reproducible. */
+        qemu_guest_getrandom_nofail(&bits, sizeof(bits));
+        return bits;
+    }
     default:
         return 0;
     }
