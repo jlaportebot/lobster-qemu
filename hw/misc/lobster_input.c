@@ -60,6 +60,17 @@ OBJECT_DECLARE_SIMPLE_TYPE(LobsterInputState, LOBSTER_INPUT)
 #define LOBSTER_MOD_ALT    0x04
 #define LOBSTER_MOD_GUI    0x08
 
+/*
+ * Mouse button state bits in event slot byte [6] (guest ABI: bit0 left,
+ * bit1 right, bit2 middle — shared by the console mouse path and the
+ * HMP injection path).
+ */
+#define LOBSTER_BTN_LEFT   0x01
+#define LOBSTER_BTN_RIGHT  0x02
+#define LOBSTER_BTN_MIDDLE 0x04
+#define LOBSTER_BTN_MASK   (LOBSTER_BTN_LEFT | LOBSTER_BTN_RIGHT | \
+                            LOBSTER_BTN_MIDDLE)
+
 typedef struct {
     uint8_t  type;
     uint8_t  flags;
@@ -147,14 +158,27 @@ static void lobster_mouse_event(DeviceState *dev, QemuConsole *src,
 
         /* Get current button state */
         static uint8_t btn_state = 0;
+        uint8_t bit;
+
+        switch (btn->button) {
+        case INPUT_BUTTON_LEFT:
+            bit = LOBSTER_BTN_LEFT;
+            break;
+        case INPUT_BUTTON_RIGHT:
+            bit = LOBSTER_BTN_RIGHT;
+            break;
+        case INPUT_BUTTON_MIDDLE:
+            bit = LOBSTER_BTN_MIDDLE;
+            break;
+        default:
+            bit = 0;
+            break;
+        }
+
         if (btn->down) {
-            if (btn->button == INPUT_BUTTON_LEFT)   btn_state |= 0x01;
-            if (btn->button == INPUT_BUTTON_RIGHT)  btn_state |= 0x02;
-            if (btn->button == INPUT_BUTTON_MIDDLE) btn_state |= 0x04;
+            btn_state |= bit;
         } else {
-            if (btn->button == INPUT_BUTTON_LEFT)   btn_state &= ~0x01;
-            if (btn->button == INPUT_BUTTON_RIGHT)  btn_state &= ~0x02;
-            if (btn->button == INPUT_BUTTON_MIDDLE) btn_state &= ~0x04;
+            btn_state &= (uint8_t) ~bit;
         }
 
 
@@ -560,10 +584,15 @@ void lobster_input_hmp_click(int press)
     if (!s) {
         return;
     }
+    /*
+     * `press` is a button mask — bit0 left, bit1 right, bit2 middle —
+     * matching the btn_state word the console mouse path emits. 0
+     * releases every button, so a repeated click always starts clean.
+     */
     LobsterEvent ev = {
-        .type = 2, .flags = 0,
+        .type = EV_MOUSE_BTN, .flags = 0,
         .x = (uint16_t)s->abs_x, .y = (uint16_t)s->abs_y,
-        .btn = press ? 1 : 0,
+        .btn = (uint8_t)(press & LOBSTER_BTN_MASK),
     };
     push_event(s, ev);
 }

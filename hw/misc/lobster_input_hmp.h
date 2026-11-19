@@ -3,6 +3,10 @@
 #define LOBSTER_INPUT_HMP_H
 
 void lobster_input_hmp_mouse(int x, int y);
+/*
+ * Click as a button mask: bit0 left, bit1 right, bit2 middle; 0 = release
+ * all buttons. Masks beyond 0x07 are ignored.
+ */
 void lobster_input_hmp_click(int press);
 void lobster_input_hmp_key(uint8_t scancode);
 /* Key press+release with modifier flags (bit0=shift, bit1=ctrl, bit2=alt). */

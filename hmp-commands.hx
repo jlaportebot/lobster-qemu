@@ -1876,14 +1876,15 @@ ERST
     {
         .name       = "lclick",
         .args_type  = "press:i?",
-        .params     = "[press]",
-        .help       = "LobsterOS guest mouse button 1 press (default) or release (0)",
+        .params     = "[button mask]",
+        .help       = "LobsterOS guest mouse button mask press (1 left by default); 0 releases all",
         .cmd        = hmp_lclick,
     },
 
 SRST
-``lclick`` [*press*]
-  Press (default) or release (0) the LobsterOS guest mouse button 1.
+``lclick`` [*button mask*]
+  Press a LobsterOS guest mouse button, as a mask: 1 left (default), 2
+  right, 4 middle. A mask of 0 releases every button.
 ERST
 
     {
